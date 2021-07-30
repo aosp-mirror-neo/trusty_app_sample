@@ -29,6 +29,7 @@ MODULE_LIBRARY_DEPS += \
 	trusty/user/base/lib/libcompiler_builtins-rust \
 	trusty/user/base/lib/libc-rust \
 	trusty/user/base/lib/log-rust \
+	trusty/user/base/lib/system_state/rust \
 	trusty/user/base/lib/tipc/rust \
 	trusty/user/base/lib/trusty-log \
 	trusty/user/base/lib/trusty-sys \

@@ -19,7 +19,9 @@
 #![no_std]
 
 extern crate libc;
+extern crate tipc;
 use log::info;
+use system_state::{SystemState, SystemStateFlag};
 use trusty_std::io::{stdout, Write};
 use trusty_std::write;
 use trusty_sys::iovec;
@@ -42,6 +44,13 @@ fn main(_argc: isize, _argv: *const *const u8) -> isize {
     write!(stdout(), "Hello from the Trusty Rust std!\n");
 
     info!("Hello from the log crate!");
+
+    let state = SystemState::try_connect().expect("Could not connect to system state service");
+
+    let provisioning_allowed = state
+        .get_flag(SystemStateFlag::ProvisioningAllowed)
+        .expect("Could not get provisioning flag");
+    info!("Provisioning allowed: {}", provisioning_allowed);
 
     0
 }
