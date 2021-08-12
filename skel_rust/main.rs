@@ -15,7 +15,6 @@
  */
 
 #![allow(unused)]
-#![feature(start)]
 #![no_std]
 
 extern crate libc;
@@ -26,8 +25,7 @@ use trusty_std::io::{stdout, Write};
 use trusty_std::write;
 use trusty_sys::iovec;
 
-#[start]
-fn main(_argc: isize, _argv: *const *const u8) -> isize {
+fn main() {
     trusty_log::init();
 
     let message = b"Hello from Rust!\n";
@@ -51,6 +49,4 @@ fn main(_argc: isize, _argv: *const *const u8) -> isize {
         .get_flag(SystemStateFlag::ProvisioningAllowed)
         .expect("Could not get provisioning flag");
     info!("Provisioning allowed: {}", provisioning_allowed);
-
-    0
 }
