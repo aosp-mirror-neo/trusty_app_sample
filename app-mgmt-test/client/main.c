@@ -900,6 +900,52 @@ TEST_F(AppMgrPortStart, PortStartPendingWaitingClosedPositive) {
     wait_and_exit(_state, PEND_CHAN);
 }
 
+/*
+ * Connecting to an app's start port as it terminating should always restart the
+ * app
+ */
+TEST(AppMgrPortStartRacingTerminate, PortStartRacingTerminate) {
+    int rc;
+    handle_t chan = INVALID_IPC_HANDLE;
+    uevent_t uevt;
+    uint32_t error = load_app(port_start_app_begin, port_start_app_end);
+    ASSERT_EQ(false, HasFailure());
+    ASSERT_EQ(true, error == APPLOADER_NO_ERROR ||
+                            error == APPLOADER_ERR_ALREADY_EXISTS);
+
+    /* Connect to the start port triggering app start */
+    rc = connect(START_PORT, IPC_CONNECT_ASYNC);
+    ASSERT_GE(rc, 0);
+    chan = (handle_t)rc;
+
+    /* Make sure port-start-srv started successfully */
+    ASSERT_EQ(0, wait(chan, &uevt, UNEXPECTED_TIMEOUT_MS));
+    ASSERT_NE(0, IPC_HANDLE_POLL_READY & uevt.event);
+    ASSERT_EQ(true, port_start_srv_running());
+
+    /* Close the main channel and shutdown port-start-srv */
+    chan_send_cmd(chan, CMD_EXIT);
+    ASSERT_EQ(false, HasFailure());
+    close(chan);
+
+    /* Immediately reconnect to the start port triggering app start */
+    rc = connect(START_PORT, IPC_CONNECT_ASYNC);
+    ASSERT_GE(rc, 0);
+    chan = (handle_t)rc;
+
+    /* Make sure port-start-srv started successfully */
+    ASSERT_EQ(0, wait(chan, &uevt, UNEXPECTED_TIMEOUT_MS));
+    ASSERT_NE(0, IPC_HANDLE_POLL_READY & uevt.event);
+    ASSERT_EQ(true, port_start_srv_running());
+
+    /* Close the main channel and shutdown port-start-srv */
+    chan_send_cmd(chan, CMD_EXIT);
+    ASSERT_EQ(false, HasFailure());
+
+test_abort:
+    close(chan);
+}
+
 /* Test loading an unsigned app */
 TEST(AppLoader, UnsignedApp) {
     uint32_t error = load_app(unsigned_app_begin, unsigned_app_end);
