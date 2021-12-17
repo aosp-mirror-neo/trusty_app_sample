@@ -45,13 +45,19 @@
 #define WAIT_FOR_APP_SLEEP_NS 500000000
 
 /*
- * These tests makes use of one client TA (this file) and 4 test server TAs:
- * boot-start-srv, never-start-srv, restart-srv and port-tart-srv.
+ * These tests makes use of one client TA (this file), 7 test server TAs, and
+ * one malformed (unsigned) TA.
  *
  * boot-start-srv:
  *  - Starts at boot
  *  - Creates BOOT_START_PORT
  *  - Never exits
+ *  - Does not restart at exit
+ *
+ * dev-only-srv:
+ *  - Starts at boot
+ *  - Tests that this app is only loadable if the unlocked system state flag is
+ *    set and that attempts to load it fails verification otherwise.
  *  - Does not restart at exit
  *
  * never-start-srv:
@@ -66,7 +72,7 @@
  *  - Exits after receiving a connection
  *  - Restarts after exiting
  *
- * start-port-srv:
+ * port-start-srv:
  *  - Doesn't start at boot
  *  - Starts on connections to START_PORT
  *  - Creates START_PORT, CTRL_PORT and SHUTDOWN_PORT
@@ -74,6 +80,20 @@
  *    SHUTDOWN_PORT
  *  - Does not restart at exit
  *
+ * port-start-fail-srv:
+ *  - Doesn't start at boot
+ *  - Fails to start because it requests almost 4GB heap and stack
+ *  - Never runs and thus never exits
+ *
+ * port-waiter-srv:
+ *  - Starts at boot
+ *  - Waits on the port of another loadable app that has yet to load
+ *  - Starts the second app
+ *  - Never exists
+ *  - Does not restart at exit
+ *
+ * unsigned:
+ *  - Tests that loading of malformed app leads to verification failure
  */
 
 static bool port_start_srv_running(void) {
