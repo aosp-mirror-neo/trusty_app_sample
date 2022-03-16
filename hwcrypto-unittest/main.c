@@ -31,9 +31,12 @@
 
 #define TLOG_TAG "hwcrypto_unittest"
 
+#include <stddef.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 
+#include <interface/hwkey/hwkey.h>
 #include <lib/hwkey/hwkey.h>
 #include <lib/rng/trusty_rng.h>
 #include <trusty_unittest.h>
@@ -57,7 +60,6 @@
 static const uint8_t UNITTEST_KEYSLOT[] = "unittestkeyslotunittestkeyslotun";
 static const uint8_t UNITTEST_DERIVED_KEYSLOT[] =
         "unittestderivedkeyslotunittestde";
-
 #if WITH_HWCRYPTO_UNITTEST
 #define DISABLED_WITHOUT_HWCRYPTO_UNITTEST(name) name
 #else
@@ -66,6 +68,19 @@ static const uint8_t UNITTEST_DERIVED_KEYSLOT[] =
         "Hwkey tests will not test anything."
 #define DISABLED_WITHOUT_HWCRYPTO_UNITTEST(name) DISABLED_##name
 #endif
+
+static bool keys_are_sufficiently_distinct(uint8_t* buf1,
+                                           size_t buf1_len,
+                                           uint8_t* buf2,
+                                           size_t buf2_len) {
+    size_t differing_bytes = 0;
+    for (size_t i = 0; i < MIN(buf1_len, buf2_len); ++i) {
+        if (buf1[i] ^ buf2[i]) {
+            differing_bytes++;
+        }
+    }
+    return MIN(buf1_len, buf2_len) - differing_bytes <= 4;
+}
 
 /*
  * Implement this hook for device specific hwkey tests
@@ -131,6 +146,13 @@ TEST_F(hwkey, derive_repeatable) {
     uint8_t dest2[sizeof(dest)];
     static const size_t size = sizeof(dest);
     uint32_t kdf_version = HWKEY_KDF_VERSION_BEST;
+    struct hwkey_versioned_key_options versioned_args = {
+            .kdf_version = HWKEY_KDF_VERSION_BEST,
+            .rollback_version_source = HWKEY_ROLLBACK_RUNNING_VERSION,
+            .os_rollback_version = 0,
+            .context = src_data,
+            .context_len = size,
+    };
 
     memset(dest, 0, size);
     memset(dest2, 0, size);
@@ -152,6 +174,114 @@ TEST_F(hwkey, derive_repeatable) {
     EXPECT_EQ(0, rc, "derive repeatable - equal");
     rc = memcmp(dest, src_data, size);
     EXPECT_NE(0, rc, "derive repeatable - same as seed");
+
+    /* derive the same key using the versioned API fallback */
+    memset(dest2, 0, size);
+    versioned_args.key = dest2;
+    versioned_args.key_len = size;
+    rc = hwkey_derive_versioned(_state->hwkey_session, &versioned_args);
+    EXPECT_EQ(NO_ERROR, rc, "derive repeatable - versioned API");
+
+    /* ensure they are the same */
+    rc = memcmp(dest, dest2, size);
+    EXPECT_EQ(0, rc, "derive repeatable - equal");
+
+    /* ensure that we don't derive the same key if deriving a shared key */
+    memset(dest2, 0, size);
+    versioned_args.shared_key = true;
+    rc = hwkey_derive_versioned(_state->hwkey_session, &versioned_args);
+    EXPECT_EQ(NO_ERROR, rc, "derive repeatable - versioned API");
+
+    rc = memcmp(dest, dest2, size);
+    EXPECT_NE(0, rc, "derive repeatable - equal");
+    EXPECT_EQ(true, keys_are_sufficiently_distinct(dest, size, dest2, size),
+              "derived keys share too many bytes");
+
+    /*
+     * ensure that we don't derive the same key if deriving a versioned,
+     * device-unique key
+     */
+    memset(dest2, 0, size);
+    versioned_args.shared_key = false;
+    versioned_args.os_rollback_version = HWKEY_ROLLBACK_VERSION_CURRENT;
+    rc = hwkey_derive_versioned(_state->hwkey_session, &versioned_args);
+    EXPECT_EQ(NO_ERROR, rc, "derive repeatable - versioned API");
+
+    rc = memcmp(dest, dest2, size);
+    if (versioned_args.os_rollback_version > 0) {
+        EXPECT_NE(0, rc, "derive repeatable - equal");
+        EXPECT_EQ(true, keys_are_sufficiently_distinct(dest, size, dest2, size),
+                  "derived keys share too many bytes");
+    } else {
+        EXPECT_EQ(0, rc, "derive repeatable - not equal");
+    }
+}
+
+TEST_F(hwkey, derive_repeatable_versioned) {
+    const uint8_t src_data[] = "thirtytwo-bytes-of-nonsense-data";
+    uint8_t dest[128];
+    uint8_t dest2[128];
+    static const size_t key_len = sizeof(dest);
+    long rc;
+    struct hwkey_versioned_key_options versioned_args = {
+            .kdf_version = HWKEY_KDF_VERSION_BEST,
+            .rollback_version_source = HWKEY_ROLLBACK_RUNNING_VERSION,
+            .os_rollback_version = HWKEY_ROLLBACK_VERSION_CURRENT,
+            .context = src_data,
+            .context_len = sizeof(src_data),
+            .key_len = key_len,
+    };
+
+    memset(dest, 0, key_len);
+    memset(dest2, 0, key_len);
+
+    versioned_args.key = dest;
+    rc = hwkey_derive_versioned(_state->hwkey_session, &versioned_args);
+    EXPECT_EQ(NO_ERROR, rc, "derive repeatable versioned - initial derivation");
+    EXPECT_NE(HWKEY_KDF_VERSION_BEST, versioned_args.kdf_version,
+              "derive repeatable versioned - kdf version");
+
+    rc = memcmp(dest, dest2, key_len);
+    EXPECT_NE(0, rc, "derive repeatable versioned - not zeroed");
+    EXPECT_NE(versioned_args.os_rollback_version,
+              HWKEY_ROLLBACK_VERSION_CURRENT,
+              "derive repeatable current version");
+
+    memset(dest2, 0, key_len);
+    versioned_args.key = dest2;
+    rc = hwkey_derive_versioned(_state->hwkey_session, &versioned_args);
+    EXPECT_EQ(NO_ERROR, rc, "derive repeatable versioned - second derivation");
+
+    /* ensure they are the same */
+    rc = memcmp(dest, dest2, key_len);
+    EXPECT_EQ(0, rc, "derive repeatable versioned - equal");
+    rc = memcmp(dest, src_data, sizeof(src_data));
+    EXPECT_NE(0, rc, "derive repeatable versioned - same as seed");
+
+    /* repeat for shared keys */
+    versioned_args.shared_key = true;
+    memset(dest, 0, key_len);
+    memset(dest2, 0, key_len);
+
+    versioned_args.key = dest;
+    rc = hwkey_derive_versioned(_state->hwkey_session, &versioned_args);
+    EXPECT_EQ(NO_ERROR, rc, "derive repeatable versioned - initial derivation");
+    EXPECT_NE(HWKEY_KDF_VERSION_BEST, versioned_args.kdf_version,
+              "derive repeatable versioned - kdf version");
+
+    rc = memcmp(dest, dest2, key_len);
+    EXPECT_NE(0, rc, "derive repeatable versioned - not zeroed");
+
+    memset(dest2, 0, key_len);
+    versioned_args.key = dest2;
+    rc = hwkey_derive_versioned(_state->hwkey_session, &versioned_args);
+    EXPECT_EQ(NO_ERROR, rc, "derive repeatable versioned - second derivation");
+
+    /* ensure they are the same */
+    rc = memcmp(dest, dest2, key_len);
+    EXPECT_EQ(0, rc, "derive repeatable versioned - equal");
+    rc = memcmp(dest, src_data, sizeof(src_data));
+    EXPECT_NE(0, rc, "derive repeatable versioned - same as seed");
 }
 
 TEST_F(hwkey, derive_different) {
@@ -185,6 +315,336 @@ TEST_F(hwkey, derive_different) {
     EXPECT_NE(0, rc, "derive not repeatable - equal to source");
     rc = memcmp(dest2, src_data2, size);
     EXPECT_NE(0, rc, "derive not repeatable - equal to source");
+
+    EXPECT_EQ(true, keys_are_sufficiently_distinct(dest, size, dest2, size),
+              "derived keys share too many bytes");
+}
+
+TEST_F(hwkey, derive_different_versioned) {
+    const uint8_t src_data[] = "thirtytwo-bytes-of-nonsense-data";
+    const uint8_t src_data2[] = "thirtytwo-byt3s-of-nons3ns3-data";
+
+    uint8_t dest[32];
+    uint8_t dest2[sizeof(dest)];
+    uint8_t dest_shared[sizeof(dest)];
+    uint8_t dest_shared2[sizeof(dest)];
+    static const uint32_t size = sizeof(dest);
+    long rc;
+    struct hwkey_versioned_key_options versioned_args;
+
+    memset(dest, 0, size);
+    memset(dest2, 0, size);
+    memset(dest_shared, 0, size);
+    memset(dest_shared2, 0, size);
+
+    versioned_args = (struct hwkey_versioned_key_options){
+            .kdf_version = HWKEY_KDF_VERSION_BEST,
+            .rollback_version_source = HWKEY_ROLLBACK_RUNNING_VERSION,
+            .os_rollback_version = HWKEY_ROLLBACK_VERSION_CURRENT,
+            .context = src_data,
+            .context_len = sizeof(src_data),
+            .shared_key = false,
+            .key = dest,
+            .key_len = sizeof(dest),
+    };
+    rc = hwkey_derive_versioned(_state->hwkey_session, &versioned_args);
+    EXPECT_EQ(NO_ERROR, rc,
+              "derive not repeatable versioned - initial derivation");
+    EXPECT_NE(HWKEY_KDF_VERSION_BEST, versioned_args.kdf_version,
+              "derive not repeatable versioned - kdf version");
+
+    /* derive with the same input but an older OS version */
+    if (versioned_args.os_rollback_version >= 1) {
+        versioned_args = (struct hwkey_versioned_key_options){
+                .kdf_version = HWKEY_KDF_VERSION_BEST,
+                .rollback_version_source = HWKEY_ROLLBACK_RUNNING_VERSION,
+                .os_rollback_version = versioned_args.os_rollback_version - 1,
+                .context = src_data,
+                .context_len = sizeof(src_data),
+                .shared_key = false,
+                .key = dest2,
+                .key_len = sizeof(dest2),
+        };
+        rc = hwkey_derive_versioned(_state->hwkey_session, &versioned_args);
+        EXPECT_EQ(NO_ERROR, rc,
+                  "derive not repeatable versioned - second derivation");
+
+        /* ensure they are not the same */
+        rc = memcmp(dest, dest2, size);
+        EXPECT_NE(0, rc, "derive not repeatable - equal");
+        rc = memcmp(dest, src_data, size);
+        EXPECT_NE(0, rc, "derive not repeatable - equal to source");
+        rc = memcmp(dest2, src_data2, size);
+        EXPECT_NE(0, rc, "derive not repeatable - equal to source");
+
+        EXPECT_EQ(true, keys_are_sufficiently_distinct(dest, size, dest2, size),
+                  "derived keys share too many bytes");
+    }
+
+    /* derive with different input */
+    memset(dest2, 0, size);
+    versioned_args = (struct hwkey_versioned_key_options){
+            .kdf_version = HWKEY_KDF_VERSION_BEST,
+            .rollback_version_source = HWKEY_ROLLBACK_RUNNING_VERSION,
+            .os_rollback_version = HWKEY_ROLLBACK_VERSION_CURRENT,
+            .context = src_data2,
+            .context_len = sizeof(src_data2),
+            .shared_key = false,
+            .key = dest2,
+            .key_len = sizeof(dest2),
+    };
+    rc = hwkey_derive_versioned(_state->hwkey_session, &versioned_args);
+    EXPECT_EQ(NO_ERROR, rc,
+              "derive not repeatable versioned - second derivation");
+
+    /* ensure they are not the same */
+    rc = memcmp(dest, dest2, size);
+    EXPECT_NE(0, rc, "derive not repeatable - equal");
+    rc = memcmp(dest, src_data, size);
+    EXPECT_NE(0, rc, "derive not repeatable - equal to source");
+    rc = memcmp(dest2, src_data2, size);
+    EXPECT_NE(0, rc, "derive not repeatable - equal to source");
+
+    EXPECT_EQ(true, keys_are_sufficiently_distinct(dest, size, dest2, size),
+              "derived keys share too many bytes");
+
+    /* derive a shared key from the same input and ensure different */
+    versioned_args = (struct hwkey_versioned_key_options){
+            .kdf_version = HWKEY_KDF_VERSION_BEST,
+            .rollback_version_source = HWKEY_ROLLBACK_RUNNING_VERSION,
+            .os_rollback_version = HWKEY_ROLLBACK_VERSION_CURRENT,
+            .context = src_data,
+            .context_len = sizeof(src_data),
+            .shared_key = true,
+            .key = dest_shared,
+            .key_len = sizeof(dest_shared),
+    };
+    rc = hwkey_derive_versioned(_state->hwkey_session, &versioned_args);
+    EXPECT_EQ(NO_ERROR, rc,
+              "derive not repeatable versioned - second derivation");
+
+    /* ensure they are not the same */
+    rc = memcmp(dest, dest_shared, size);
+    EXPECT_NE(0, rc, "derive not repeatable - equal");
+    rc = memcmp(dest2, dest_shared, size);
+    EXPECT_NE(0, rc, "derive not repeatable - equal");
+    rc = memcmp(dest_shared, src_data, size);
+    EXPECT_NE(0, rc, "derive not repeatable - equal to source");
+
+    EXPECT_EQ(true,
+              keys_are_sufficiently_distinct(dest, size, dest_shared, size),
+              "derived keys share too many bytes");
+    EXPECT_EQ(true,
+              keys_are_sufficiently_distinct(dest2, size, dest_shared, size),
+              "derived keys share too many bytes");
+
+    /* shared key, different input */
+    versioned_args = (struct hwkey_versioned_key_options){
+            .kdf_version = HWKEY_KDF_VERSION_BEST,
+            .rollback_version_source = HWKEY_ROLLBACK_RUNNING_VERSION,
+            .os_rollback_version = HWKEY_ROLLBACK_VERSION_CURRENT,
+            .context = src_data2,
+            .context_len = sizeof(src_data2),
+            .shared_key = true,
+            .key = dest_shared2,
+            .key_len = sizeof(dest_shared2),
+    };
+    rc = hwkey_derive_versioned(_state->hwkey_session, &versioned_args);
+    EXPECT_EQ(NO_ERROR, rc,
+              "derive not repeatable versioned - second derivation");
+
+    /* ensure they are not the same */
+    rc = memcmp(dest, dest_shared2, size);
+    EXPECT_NE(0, rc, "derive not repeatable - equal");
+    rc = memcmp(dest2, dest_shared2, size);
+    EXPECT_NE(0, rc, "derive not repeatable - equal");
+    rc = memcmp(dest_shared, dest_shared2, size);
+    EXPECT_NE(0, rc, "derive not repeatable - equal");
+    rc = memcmp(dest_shared2, src_data, size);
+    EXPECT_NE(0, rc, "derive not repeatable - equal to source");
+
+    EXPECT_EQ(true,
+              keys_are_sufficiently_distinct(dest, size, dest_shared, size),
+              "derived keys share too many bytes");
+    EXPECT_EQ(true,
+              keys_are_sufficiently_distinct(dest2, size, dest_shared, size),
+              "derived keys share too many bytes");
+    EXPECT_EQ(true,
+              keys_are_sufficiently_distinct(dest_shared, size, dest_shared2,
+                                             size),
+              "derived keys share too many bytes");
+
+    /* derive a shared key with the same input but an older OS version */
+    if (versioned_args.os_rollback_version >= 1) {
+        versioned_args = (struct hwkey_versioned_key_options){
+                .kdf_version = HWKEY_KDF_VERSION_BEST,
+                .rollback_version_source = HWKEY_ROLLBACK_RUNNING_VERSION,
+                .os_rollback_version = versioned_args.os_rollback_version - 1,
+                .context = src_data,
+                .context_len = sizeof(src_data),
+                .shared_key = false,
+                .key = dest_shared2,
+                .key_len = sizeof(dest_shared2),
+        };
+        rc = hwkey_derive_versioned(_state->hwkey_session, &versioned_args);
+        EXPECT_EQ(NO_ERROR, rc,
+                  "derive not repeatable versioned - second derivation");
+
+        /* ensure they are not the same */
+        rc = memcmp(dest, dest_shared2, size);
+        EXPECT_NE(0, rc, "derive not repeatable - equal");
+        rc = memcmp(dest2, dest_shared2, size);
+        EXPECT_NE(0, rc, "derive not repeatable - equal");
+        rc = memcmp(dest_shared, dest_shared2, size);
+        EXPECT_NE(0, rc, "derive not repeatable - equal");
+        rc = memcmp(dest_shared2, src_data, size);
+        EXPECT_NE(0, rc, "derive not repeatable - equal to source");
+
+        EXPECT_EQ(true,
+                  keys_are_sufficiently_distinct(dest, size, dest_shared, size),
+                  "derived keys share too many bytes");
+        EXPECT_EQ(
+                true,
+                keys_are_sufficiently_distinct(dest2, size, dest_shared, size),
+                "derived keys share too many bytes");
+        EXPECT_EQ(true,
+                  keys_are_sufficiently_distinct(dest_shared, size,
+                                                 dest_shared2, size),
+                  "derived keys share too many bytes");
+    }
+}
+
+TEST_F(hwkey, derive_different_version_source) {
+    const uint8_t src_data[] = "thirtytwo-bytes-of-nonsense-data";
+
+    uint8_t dest[32];
+    uint8_t dest2[sizeof(dest)];
+    uint8_t dest_shared[sizeof(dest)];
+    uint8_t dest_shared2[sizeof(dest)];
+    static const uint32_t size = sizeof(dest);
+    long rc;
+    struct hwkey_versioned_key_options versioned_args;
+
+    memset(dest, 0, size);
+    memset(dest2, 0, size);
+    memset(dest_shared, 0, size);
+    memset(dest_shared2, 0, size);
+
+    /* derive with current committed version */
+    versioned_args = (struct hwkey_versioned_key_options){
+            .kdf_version = HWKEY_KDF_VERSION_BEST,
+            .rollback_version_source = HWKEY_ROLLBACK_COMMITTED_VERSION,
+            .os_rollback_version = HWKEY_ROLLBACK_VERSION_CURRENT,
+            .context = src_data,
+            .context_len = sizeof(src_data),
+            .shared_key = false,
+            .key = dest,
+            .key_len = sizeof(dest),
+    };
+    rc = hwkey_derive_versioned(_state->hwkey_session, &versioned_args);
+    EXPECT_EQ(NO_ERROR, rc,
+              "derive not repeatable versioned - initial derivation");
+    EXPECT_NE(HWKEY_KDF_VERSION_BEST, versioned_args.kdf_version,
+              "derive not repeatable versioned - kdf version");
+
+    /*
+     * derive with the same input and rollback version but a different version
+     * source
+     */
+    versioned_args = (struct hwkey_versioned_key_options){
+            .kdf_version = HWKEY_KDF_VERSION_BEST,
+            .rollback_version_source = HWKEY_ROLLBACK_RUNNING_VERSION,
+            .os_rollback_version = versioned_args.os_rollback_version,
+            .context = src_data,
+            .context_len = sizeof(src_data),
+            .shared_key = false,
+            .key = dest2,
+            .key_len = sizeof(dest2),
+    };
+    rc = hwkey_derive_versioned(_state->hwkey_session, &versioned_args);
+    EXPECT_EQ(NO_ERROR, rc,
+              "derive not repeatable versioned - different source");
+
+    if (versioned_args.os_rollback_version > 0) {
+        /* not backwards compatible derivation */
+        rc = memcmp(dest, dest2, size);
+        EXPECT_NE(0, rc, "derive not repeatable - equal");
+        rc = memcmp(dest, src_data, size);
+        EXPECT_NE(0, rc, "derive not repeatable - equal to source");
+
+        EXPECT_EQ(true, keys_are_sufficiently_distinct(dest, size, dest2, size),
+                  "derived keys share too many bytes");
+    } else {
+        /* backwards compatible derivation, should be the same */
+        rc = memcmp(dest, dest2, size);
+        EXPECT_EQ(0, rc, "derive not repeatable - not equal");
+    }
+
+    /* derive shared key with 0 committed version */
+    versioned_args = (struct hwkey_versioned_key_options){
+            .kdf_version = HWKEY_KDF_VERSION_BEST,
+            .rollback_version_source = HWKEY_ROLLBACK_COMMITTED_VERSION,
+            .os_rollback_version = 0,
+            .context = src_data,
+            .context_len = sizeof(src_data),
+            .shared_key = true,
+            .key = dest_shared,
+            .key_len = sizeof(dest_shared),
+    };
+    rc = hwkey_derive_versioned(_state->hwkey_session, &versioned_args);
+    EXPECT_EQ(NO_ERROR, rc,
+              "derive not repeatable versioned - initial derivation");
+
+    /* ensure they are not the same */
+    rc = memcmp(dest, dest_shared, size);
+    EXPECT_NE(0, rc, "derive not repeatable - equal");
+    rc = memcmp(dest2, dest_shared, size);
+    EXPECT_NE(0, rc, "derive not repeatable - equal");
+    rc = memcmp(dest_shared, src_data, size);
+    EXPECT_NE(0, rc, "derive not repeatable - equal to source");
+
+    EXPECT_EQ(true,
+              keys_are_sufficiently_distinct(dest, size, dest_shared, size),
+              "derived keys share too many bytes");
+    EXPECT_EQ(true,
+              keys_are_sufficiently_distinct(dest2, size, dest_shared, size),
+              "derived keys share too many bytes");
+
+    /* derive shared key with 0 running version */
+    versioned_args = (struct hwkey_versioned_key_options){
+            .kdf_version = HWKEY_KDF_VERSION_BEST,
+            .rollback_version_source = HWKEY_ROLLBACK_RUNNING_VERSION,
+            .os_rollback_version = 0,
+            .context = src_data,
+            .context_len = sizeof(src_data),
+            .shared_key = true,
+            .key = dest_shared2,
+            .key_len = sizeof(dest_shared2),
+    };
+    rc = hwkey_derive_versioned(_state->hwkey_session, &versioned_args);
+    EXPECT_EQ(NO_ERROR, rc,
+              "derive not repeatable versioned - initial derivation");
+
+    /* ensure they are not the same */
+    rc = memcmp(dest, dest_shared2, size);
+    EXPECT_NE(0, rc, "derive not repeatable - equal");
+    rc = memcmp(dest2, dest_shared2, size);
+    EXPECT_NE(0, rc, "derive not repeatable - equal");
+    rc = memcmp(dest_shared, dest_shared2, size);
+    EXPECT_NE(0, rc, "derive not repeatable - equal");
+    rc = memcmp(dest_shared2, src_data, size);
+    EXPECT_NE(0, rc, "derive not repeatable - equal to source");
+
+    EXPECT_EQ(true,
+              keys_are_sufficiently_distinct(dest, size, dest_shared2, size),
+              "derived keys share too many bytes");
+    EXPECT_EQ(true,
+              keys_are_sufficiently_distinct(dest2, size, dest_shared2, size),
+              "derived keys share too many bytes");
+    EXPECT_EQ(true,
+              keys_are_sufficiently_distinct(dest_shared, size, dest_shared2,
+                                             size),
+              "derived keys share too many bytes");
 }
 
 TEST_F(hwkey, derive_zero_length) {
@@ -197,6 +657,145 @@ TEST_F(hwkey, derive_zero_length) {
     long rc = hwkey_derive(_state->hwkey_session, &kdf_version, src_data, dest,
                            size);
     EXPECT_EQ(ERR_NOT_VALID, rc, "derive zero length");
+}
+
+TEST_F(hwkey, derive_version_query) {
+    struct hwkey_versioned_key_options versioned_args = {
+            .kdf_version = HWKEY_KDF_VERSION_BEST,
+            .rollback_version_source = HWKEY_ROLLBACK_RUNNING_VERSION,
+            .os_rollback_version = HWKEY_ROLLBACK_VERSION_CURRENT,
+            .context = NULL,
+            .context_len = 0,
+            .key = NULL,
+            .key_len = 0,
+    };
+
+    /* NULL key and context can be used to query the current rollback version */
+    long rc = hwkey_derive_versioned(_state->hwkey_session, &versioned_args);
+    EXPECT_EQ(NO_ERROR, rc, "versioned derive with zero length");
+    EXPECT_NE(HWKEY_ROLLBACK_VERSION_CURRENT,
+              versioned_args.os_rollback_version,
+              "running rollback version not updated");
+
+    versioned_args.rollback_version_source = HWKEY_ROLLBACK_COMMITTED_VERSION;
+    versioned_args.os_rollback_version = HWKEY_ROLLBACK_VERSION_CURRENT;
+    rc = hwkey_derive_versioned(_state->hwkey_session, &versioned_args);
+    EXPECT_EQ(NO_ERROR, rc, "versioned derive with zero length");
+    EXPECT_NE(HWKEY_ROLLBACK_VERSION_CURRENT,
+              versioned_args.os_rollback_version,
+              "running rollback version not updated");
+
+    versioned_args.key_len = 42;
+    rc = hwkey_derive_versioned(_state->hwkey_session, &versioned_args);
+    EXPECT_EQ(ERR_NOT_VALID, rc,
+              "versioned derive with null key but non-zero length");
+}
+
+TEST_F(hwkey, derive_null_context) {
+    uint8_t key[32];
+    struct hwkey_versioned_key_options versioned_args = {
+            .kdf_version = HWKEY_KDF_VERSION_BEST,
+            .rollback_version_source = HWKEY_ROLLBACK_RUNNING_VERSION,
+            .os_rollback_version = HWKEY_ROLLBACK_VERSION_CURRENT,
+            .context = NULL,
+            .context_len = 0,
+            .key = key,
+            .key_len = sizeof(key),
+    };
+
+    long rc = hwkey_derive_versioned(_state->hwkey_session, &versioned_args);
+    EXPECT_NE(NO_ERROR, rc, "versioned derive with empty context");
+
+    versioned_args.context_len = 42;
+    rc = hwkey_derive_versioned(_state->hwkey_session, &versioned_args);
+    EXPECT_EQ(ERR_NOT_VALID, rc,
+              "versioned derive with null context but non-zero length");
+}
+
+TEST_F(hwkey, derive_newer_versions) {
+    uint8_t key[32];
+    long rc;
+    struct hwkey_versioned_key_options versioned_args;
+
+    versioned_args = (struct hwkey_versioned_key_options){
+            .kdf_version = HWKEY_KDF_VERSION_BEST,
+            .rollback_version_source = HWKEY_ROLLBACK_RUNNING_VERSION,
+            .os_rollback_version = HWKEY_ROLLBACK_VERSION_CURRENT,
+    };
+    rc = hwkey_derive_versioned(_state->hwkey_session, &versioned_args);
+    EXPECT_EQ(NO_ERROR, rc, "versioned derive query failed");
+
+    /* request a newer version */
+
+    versioned_args = (struct hwkey_versioned_key_options){
+            .kdf_version = HWKEY_KDF_VERSION_BEST,
+            .rollback_version_source = HWKEY_ROLLBACK_RUNNING_VERSION,
+            .os_rollback_version = versioned_args.os_rollback_version + 1,
+            .key = key,
+            .key_len = sizeof(key),
+    };
+    rc = hwkey_derive_versioned(_state->hwkey_session, &versioned_args);
+    EXPECT_NE(NO_ERROR, rc, "versioned derive with too new running version");
+
+    /* query committed version */
+    versioned_args = (struct hwkey_versioned_key_options){
+            .kdf_version = HWKEY_KDF_VERSION_BEST,
+            .rollback_version_source = HWKEY_ROLLBACK_COMMITTED_VERSION,
+            .os_rollback_version = HWKEY_ROLLBACK_VERSION_CURRENT,
+    };
+    rc = hwkey_derive_versioned(_state->hwkey_session, &versioned_args);
+    EXPECT_EQ(NO_ERROR, rc, "versioned derive query failed");
+
+    /* request a newer version */
+    versioned_args = (struct hwkey_versioned_key_options){
+            .kdf_version = HWKEY_KDF_VERSION_BEST,
+            .rollback_version_source = HWKEY_ROLLBACK_COMMITTED_VERSION,
+            .os_rollback_version = versioned_args.os_rollback_version + 1,
+            .key = key,
+            .key_len = sizeof(key),
+    };
+    rc = hwkey_derive_versioned(_state->hwkey_session, &versioned_args);
+    EXPECT_NE(NO_ERROR, rc, "versioned derive with too new committed version");
+
+    /* try a very large version */
+    versioned_args = (struct hwkey_versioned_key_options){
+            .kdf_version = HWKEY_KDF_VERSION_BEST,
+            .rollback_version_source = HWKEY_ROLLBACK_COMMITTED_VERSION,
+            .os_rollback_version = INT32_MAX,
+            .key = key,
+            .key_len = sizeof(key),
+    };
+    rc = hwkey_derive_versioned(_state->hwkey_session, &versioned_args);
+    EXPECT_NE(NO_ERROR, rc, "versioned derive with far too large version");
+}
+
+TEST_F(hwkey, derive_large_payload) {
+    const size_t max_payload_size =
+            HWKEY_MAX_MSG_SIZE - sizeof(struct hwkey_derive_versioned_msg);
+    uint8_t context[HWKEY_MAX_MSG_SIZE];
+    uint8_t key[HWKEY_MAX_MSG_SIZE];
+    long rc;
+    struct hwkey_versioned_key_options versioned_args = {
+            .kdf_version = HWKEY_KDF_VERSION_BEST,
+            .rollback_version_source = HWKEY_ROLLBACK_RUNNING_VERSION,
+            .os_rollback_version = HWKEY_ROLLBACK_VERSION_CURRENT,
+            .context = context,
+            .context_len = 128,
+            .key = key,
+            .key_len = 128,
+    };
+
+    rc = hwkey_derive_versioned(_state->hwkey_session, &versioned_args);
+    EXPECT_EQ(NO_ERROR, rc, "versioned derive with large context and key");
+
+    versioned_args.context_len = max_payload_size + 1;
+    rc = hwkey_derive_versioned(_state->hwkey_session, &versioned_args);
+    EXPECT_EQ(ERR_BAD_LEN, rc, "versioned derive with too large context");
+
+    versioned_args.context_len = 128;
+    versioned_args.key_len = max_payload_size + 1;
+    rc = hwkey_derive_versioned(_state->hwkey_session, &versioned_args);
+    EXPECT_EQ(ERR_BAD_LEN, rc, "versioned derive with too large key");
 }
 
 TEST_F(hwkey, get_storage_auth) {
