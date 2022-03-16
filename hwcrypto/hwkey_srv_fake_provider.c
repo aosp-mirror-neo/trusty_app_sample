@@ -48,6 +48,14 @@
  *  should come directly or indirectly from hardware.
  */
 static uint8_t fake_device_key[32] = "this is a fake unique device key";
+static uint8_t fake_shared_key[32] = "this is a fake shared device key";
+
+/*
+ * Fake rollback versions for testing the sample app. These versions should be
+ * pulled from a secure source of truth in a real implementation.
+ */
+#define FAKE_TRUSTY_RUNNING_ROLLBACK_VERSION 2
+#define FAKE_TRUSTY_COMMITTED_ROLLBACK_VERSION 1
 
 /* This input vector is taken from RFC 5869 (Extract-and-Expand HKDF) */
 static const uint8_t IKM[] = {0x0b, 0x0b, 0x0b, 0x0b, 0x0b, 0x0b, 0x0b, 0x0b,
@@ -105,24 +113,284 @@ uint32_t derive_key_v1(const uuid_t* uuid,
                        const uint8_t* ikm_data,
                        size_t ikm_len,
                        uint8_t* key_buf,
-                       size_t* key_len) {
+                       size_t key_len) {
     if (!ikm_len) {
-        *key_len = 0;
         return HWKEY_ERR_BAD_LEN;
     }
 
-    if (!HKDF(key_buf, ikm_len, EVP_sha256(), (const uint8_t*)fake_device_key,
+    if (!HKDF(key_buf, key_len, EVP_sha256(), (const uint8_t*)fake_device_key,
               sizeof(fake_device_key), (const uint8_t*)uuid, sizeof(uuid_t),
               ikm_data, ikm_len)) {
         TLOGE("HDKF failed 0x%x\n", ERR_get_error());
-        *key_len = 0;
-        memset(key_buf, 0, ikm_len);
+        memset(key_buf, 0, key_len);
         return HWKEY_ERR_GENERIC;
     }
 
-    *key_len = ikm_len;
-
     return HWKEY_NO_ERROR;
+}
+
+/*
+ * Context labels for key derivation contexts, see derive_key_versioned_v1() for
+ * details.
+ */
+#define HWKEY_DERIVE_VERSIONED_CONTEXT_LABEL "DERIVE VERSIONED"
+#define ROOT_OF_TRUST_DERIVE_CONTEXT_LABEL "TZOS"
+
+#define HWKEY_DERIVE_VERSIONED_SALT "hwkey derive versioned salt"
+
+static uint8_t context_buf[4096];
+
+/**
+ * fill_context_buf() - Add data to context_buf
+ * @src: Pointer to data to copy into the context buf. If null, @len zero bytes
+ *       will be added.
+ * @len: Number of bytes of data to add.
+ * @cur_position: Pointer to the next unwritten byte of context_buf. Updated
+ *                with the new current position when successful.
+ *
+ * Return: HWKEY_NO_ERROR on success, HWKEY_ERR_BAD_LEN if @len will cause the
+ * buffer to overflow.
+ */
+static uint32_t fill_context_buf(const void* src,
+                                 size_t len,
+                                 size_t* cur_position) {
+    size_t new_position;
+    if (len == 0) {
+        return HWKEY_NO_ERROR;
+    }
+    if (__builtin_add_overflow(*cur_position, len, &new_position) ||
+        new_position >= sizeof(context_buf)) {
+        return HWKEY_ERR_BAD_LEN;
+    }
+    if (src == NULL) {
+        memset(&context_buf[*cur_position], 0, len);
+    } else {
+        memcpy(&context_buf[*cur_position], src, len);
+    }
+    *cur_position = new_position;
+    return HWKEY_NO_ERROR;
+}
+
+/*
+ * In a real implementation this portion of the derivation should be done by a
+ * trusted source of the Trusty OS rollback version. Doing the key derivation
+ * here in the hwkey service protects against some app-level compromises, but
+ * does not protect against compromise of any Trusty code that can derive
+ * directly using the secret key derivation input - which in this sample
+ * implementation would be the kernel and the hwkey service.
+ *
+ * This function MUST mix @rollback_version_source, @os_rollback_version, and
+ * @hwkey_context into the derivation context in a way that the client cannot
+ * forge.
+ */
+static uint32_t root_of_trust_derive_key(bool shared,
+                                         uint32_t rollback_version_source,
+                                         int32_t os_rollback_version,
+                                         const uint8_t* hwkey_context,
+                                         size_t hwkey_context_len,
+                                         uint8_t* key_buf,
+                                         size_t key_len) {
+    size_t context_len = 0;
+    int rc;
+    const size_t root_of_trust_context_len =
+            sizeof(ROOT_OF_TRUST_DERIVE_CONTEXT_LABEL) +
+            sizeof(rollback_version_source) + sizeof(os_rollback_version);
+    const uint8_t* secret_key;
+    size_t secret_key_len;
+    size_t total_len;
+
+    /*
+     * We need to move the hwkey_context (currently at the beginning of
+     * context_buf) over to make room for the root-of-trust context injected
+     * before it. We avoid the need for a separate buffer by memmoving it first
+     * then adding the context into the space we made.
+     */
+    if (__builtin_add_overflow(hwkey_context_len, root_of_trust_context_len,
+                               &total_len) ||
+        total_len >= sizeof(context_buf)) {
+        return HWKEY_ERR_BAD_LEN;
+    }
+    memmove(&context_buf[root_of_trust_context_len], hwkey_context,
+            hwkey_context_len);
+
+    /*
+     * Add a fixed label to ensure that another user of the same key derivation
+     * primitive will not collide with this use, regardless of the provided
+     * hwkey_context (as long as other users also add a different fixed label).
+     */
+    rc = fill_context_buf(ROOT_OF_TRUST_DERIVE_CONTEXT_LABEL,
+                          sizeof(ROOT_OF_TRUST_DERIVE_CONTEXT_LABEL),
+                          &context_len);
+    if (rc) {
+        return rc;
+    }
+    /* Keys for different version limit sources must be different */
+    rc = fill_context_buf(&rollback_version_source,
+                          sizeof(rollback_version_source), &context_len);
+    if (rc) {
+        return rc;
+    }
+    /*
+     * Keys with different rollback versions must not be the same. This is part
+     * of the root-of-trust context to ensure that a compromised kernel cannot
+     * forge a version (if the root of trust is outside of Trusty)
+     */
+    rc = fill_context_buf(&os_rollback_version, sizeof(os_rollback_version),
+                          &context_len);
+    if (rc) {
+        return rc;
+    }
+
+    assert(root_of_trust_context_len == context_len);
+
+    /*
+     * We already moved the hwkey_context into place after the root of trust
+     * context.
+     */
+    context_len += hwkey_context_len;
+
+    if (shared) {
+        secret_key = fake_shared_key;
+        secret_key_len = sizeof(fake_shared_key);
+    } else {
+        secret_key = fake_device_key;
+        secret_key_len = sizeof(fake_device_key);
+    }
+
+    if (!HKDF(key_buf, key_len, EVP_sha256(), secret_key, secret_key_len,
+              (const uint8_t*)HWKEY_DERIVE_VERSIONED_SALT,
+              sizeof(HWKEY_DERIVE_VERSIONED_SALT), context_buf, context_len)) {
+        TLOGE("HDKF failed 0x%x\n", ERR_get_error());
+        memset(key_buf, 0, key_len);
+        return HWKEY_ERR_GENERIC;
+    }
+    return HWKEY_NO_ERROR;
+}
+
+int32_t get_current_os_rollback_version(uint32_t source) {
+    switch (source) {
+    case HWKEY_ROLLBACK_RUNNING_VERSION:
+        return FAKE_TRUSTY_RUNNING_ROLLBACK_VERSION;
+
+    case HWKEY_ROLLBACK_COMMITTED_VERSION:
+        return FAKE_TRUSTY_COMMITTED_ROLLBACK_VERSION;
+
+    default:
+        TLOGE("Unknown rollback version source: %u\n", source);
+        return ERR_NOT_VALID;
+    }
+}
+
+/*
+ * Derive a versioned key - HMAC SHA256 based versioned key derivation function
+ */
+uint32_t derive_key_versioned_v1(
+        const uuid_t* uuid,
+        bool shared,
+        uint32_t rollback_version_source,
+        int32_t rollback_versions[HWKEY_ROLLBACK_VERSION_INDEX_COUNT],
+        const uint8_t* user_context,
+        size_t user_context_len,
+        uint8_t* key_buf,
+        size_t key_len) {
+    size_t context_len = 0;
+    int i;
+    uint32_t rc = HWKEY_NO_ERROR;
+    int32_t os_rollback_version =
+            rollback_versions[HWKEY_ROLLBACK_VERSION_OS_INDEX];
+    int32_t os_rollback_version_current =
+            get_current_os_rollback_version(rollback_version_source);
+
+    if (os_rollback_version_current < 0) {
+        rc = HWKEY_ERR_NOT_VALID;
+        goto err;
+    }
+
+    if (os_rollback_version > os_rollback_version_current) {
+        TLOGE("Requested rollback version too new: %u\n", os_rollback_version);
+        rc = HWKEY_ERR_NOT_FOUND;
+        goto err;
+    }
+
+    /* short-circuit derivation if we have nothing to derive */
+    if (key_len == 0) {
+        rc = HWKEY_NO_ERROR;
+        goto err;
+    }
+
+    /* for compatibility with unversioned derive, require a context */
+    if (!key_buf || !user_context || user_context_len == 0) {
+        rc = HWKEY_ERR_NOT_VALID;
+        goto err;
+    }
+
+    /*
+     * This portion of the context may always be added by the hwkey service, as
+     * it deals with the identity of the client requesting the key derivation.
+     */
+    /*
+     * Fixed label ensures that this derivation will not collide with a
+     * different user of root_of_trust_derive_key(), regardless of the provided
+     * user context (as long as other users also add a different fixed label).
+     */
+    rc = fill_context_buf(HWKEY_DERIVE_VERSIONED_CONTEXT_LABEL,
+                          sizeof(HWKEY_DERIVE_VERSIONED_CONTEXT_LABEL),
+                          &context_len);
+    if (rc) {
+        goto err;
+    }
+    /* Keys for different apps must be different */
+    rc = fill_context_buf(uuid, sizeof(*uuid), &context_len);
+    if (rc) {
+        goto err;
+    }
+    for (i = 0; i < HWKEY_ROLLBACK_VERSION_SUPPORTED_COUNT; ++i) {
+        /*
+         * We skip the OS version because the root-of-trust should be inserting
+         * that, and we don't want to mask a buggy implementation there in
+         * testing. If the root-of-trust somehow did not insert the OS version,
+         * we want to notice.
+         */
+        if (i == HWKEY_ROLLBACK_VERSION_OS_INDEX) {
+            continue;
+        }
+        rc = fill_context_buf(&rollback_versions[i], sizeof(*rollback_versions),
+                              &context_len);
+        if (rc) {
+            goto err;
+        }
+    }
+    /* Reserve space for additional versions in the future */
+    if (HWKEY_ROLLBACK_VERSION_SUPPORTED_COUNT <
+        HWKEY_ROLLBACK_VERSION_INDEX_COUNT) {
+        rc = fill_context_buf(NULL,
+                              sizeof(*rollback_versions) *
+                                      (HWKEY_ROLLBACK_VERSION_INDEX_COUNT -
+                                       HWKEY_ROLLBACK_VERSION_SUPPORTED_COUNT),
+                              &context_len);
+        if (rc) {
+            goto err;
+        }
+    }
+    /*
+     * Clients need to be able to generate multiple different keys in the same
+     * app.
+     */
+    rc = fill_context_buf(user_context, user_context_len, &context_len);
+    if (rc) {
+        goto err;
+    }
+
+    rc = root_of_trust_derive_key(shared, rollback_version_source,
+                                  os_rollback_version, context_buf, context_len,
+                                  key_buf, key_len);
+    if (rc) {
+        goto err;
+    }
+
+err:
+    memset(context_buf, 0, sizeof(context_buf));
+    return rc;
 }
 
 /* UUID of HWCRYPTO_UNITTEST application */
@@ -347,8 +615,9 @@ static uint32_t get_km_kak_key(const struct hwkey_keyslot* slot,
     if (kbuf_len < KM_KAK_SIZE) {
         return HWKEY_ERR_BAD_LEN;
     }
+    *klen = KM_KAK_SIZE;
 
-    return derive_key_v1(slot->uuid, kak_salt, KM_KAK_SIZE, kbuf, klen);
+    return derive_key_v1(slot->uuid, kak_salt, KM_KAK_SIZE, kbuf, *klen);
 }
 
 static const uuid_t hwaes_uuid = SAMPLE_HWAES_APP_UUID;

@@ -148,6 +148,31 @@ uint32_t derive_key_v1(const uuid_t* uuid,
                        const uint8_t* ikm_data,
                        size_t ikm_len,
                        uint8_t* key_data,
-                       size_t* key_len);
+                       size_t key_len);
+
+/**
+ * get_current_os_rollback_versions() - Get the current OS rollback version
+ * @source: Source of the rollback version, one of &enum
+ *          hwkey_rollback_version_source.
+ *
+ * Return: Negative error code on failure, current rollback version otherwise
+ */
+int32_t get_current_os_rollback_version(uint32_t source);
+
+/*
+ * This sample service supports only the first version element in the
+ * rollback_versions array in struct hwkey_derive_versioned_msg.
+ */
+#define HWKEY_ROLLBACK_VERSION_SUPPORTED_COUNT 1
+
+uint32_t derive_key_versioned_v1(
+        const uuid_t* uuid,
+        bool shared,
+        uint32_t rollback_version_source,
+        int32_t rollback_versions[HWKEY_ROLLBACK_VERSION_INDEX_COUNT],
+        const uint8_t* context,
+        size_t context_len,
+        uint8_t* key_data,
+        size_t key_len);
 
 __END_CDECLS

@@ -35,8 +35,6 @@
 #include <hwcrypto_consts.h>
 #include "hwkey_srv_priv.h"
 
-#define HWKEY_MAX_PAYLOAD_SIZE 2048
-
 struct hwkey_chan_ctx {
     struct tipc_event_handler evt_handler;
     handle_t chan;
@@ -74,8 +72,8 @@ static struct tipc_event_handler hwkey_port_evt_handler = {
         .proc = hwkey_port_handler,
 };
 
-static uint8_t req_data[HWKEY_MAX_PAYLOAD_SIZE + 1];
-static __attribute__((aligned(4))) uint8_t key_data[HWKEY_MAX_PAYLOAD_SIZE];
+static uint8_t req_data[HWKEY_MAX_MSG_SIZE + 1];
+static __attribute__((aligned(4))) uint8_t key_data[HWKEY_MAX_MSG_SIZE];
 
 static unsigned int key_slot_cnt;
 static const struct hwkey_keyslot* key_slots;
@@ -118,7 +116,7 @@ static int hwkey_send_rsp(struct hwkey_chan_ctx* ctx,
                           struct hwkey_msg* rsp_hdr,
                           uint8_t* rsp_data,
                           size_t rsp_data_len) {
-    rsp_hdr->cmd |= HWKEY_RESP_BIT;
+    rsp_hdr->header.cmd |= HWKEY_RESP_BIT;
     return tipc_send2(ctx->chan, rsp_hdr, sizeof(*rsp_hdr), rsp_data,
                       rsp_data_len);
 }
@@ -324,8 +322,8 @@ static int hwkey_handle_get_keyslot_cmd(struct hwkey_chan_ctx* ctx,
     int rc;
     size_t klen = 0;
 
-    hdr->status = _handle_slots(ctx, slot_id, key_slots, key_slot_cnt, key_data,
-                                sizeof(key_data), &klen);
+    hdr->header.status = _handle_slots(ctx, slot_id, key_slots, key_slot_cnt,
+                                       key_data, sizeof(key_data), &klen);
 
     rc = hwkey_send_rsp(ctx, hdr, key_data, klen);
     if (klen) {
@@ -333,6 +331,32 @@ static int hwkey_handle_get_keyslot_cmd(struct hwkey_chan_ctx* ctx,
         memset(key_data, 0, klen);
     }
     return rc;
+}
+
+/* Shared implementation for the unversioned key derivation API */
+static uint32_t hwkey_handle_derive_key_impl(uint32_t* kdf_version,
+                                             const uuid_t* uuid,
+                                             const uint8_t* context,
+                                             size_t context_len,
+                                             uint8_t* key,
+                                             size_t key_len) {
+    /* check requested key derivation function */
+    if (*kdf_version == HWKEY_KDF_VERSION_BEST) {
+        *kdf_version = HWKEY_KDF_VERSION_1;
+    }
+
+    if (!context || !key || key_len == 0) {
+        return HWKEY_ERR_NOT_VALID;
+    }
+
+    switch (*kdf_version) {
+    case HWKEY_KDF_VERSION_1:
+        return derive_key_v1(uuid, context, context_len, key, key_len);
+
+    default:
+        TLOGE("%u is unsupported KDF function\n", *kdf_version);
+        return HWKEY_ERR_NOT_IMPLEMENTED;
+    }
 }
 
 /*
@@ -343,28 +367,139 @@ static int hwkey_handle_derive_key_cmd(struct hwkey_chan_ctx* ctx,
                                        const uint8_t* ikm_data,
                                        size_t ikm_len) {
     int rc;
-    size_t key_len = sizeof(key_data);
-
-    /* check requested key derivation function */
-    if (hdr->arg1 == HWKEY_KDF_VERSION_BEST)
-        hdr->arg1 = HWKEY_KDF_VERSION_1; /* we only support V1 */
-
-    switch (hdr->arg1) {
-    case HWKEY_KDF_VERSION_1:
-        hdr->status = derive_key_v1(&ctx->uuid, ikm_data, ikm_len, key_data,
-                                    &key_len);
-        break;
-
-    default:
-        TLOGE("%u is unsupported KDF function\n", hdr->arg1);
+    size_t key_len = ikm_len;
+    if (key_len > HWKEY_MAX_MSG_SIZE - sizeof(*hdr)) {
+        TLOGE("Key length exceeds message size: %zu\n", key_len);
         key_len = 0;
-        hdr->status = HWKEY_ERR_NOT_IMPLEMENTED;
+        hdr->header.status = HWKEY_ERR_BAD_LEN;
+        goto send_response;
     }
 
+    hdr->header.status = hwkey_handle_derive_key_impl(
+            &hdr->arg1, &ctx->uuid, ikm_data, ikm_len, key_data, key_len);
+
+send_response:
     rc = hwkey_send_rsp(ctx, hdr, key_data, key_len);
     if (key_len) {
         /* sanitize key buffer */
-        memset(key_data, 0, key_len);
+        memset(key_data, 0, sizeof(key_data));
+    }
+    return rc;
+}
+
+/**
+ * hwkey_handle_derive_versioned_key_cmd() - Handle versioned key derivation
+ * @ctx: client context
+ * @msg: request/response message
+ * @context: key derivation info input
+ * @context_len: length in bytes of @context
+ *
+ * Derive a new key from an internal secret key, unique to the provided context,
+ * UUID of the client, and requested rollback version. Rollback versions greater
+ * than the current image or fused rollback version are not allowed. See &struct
+ * hwkey_derive_versioned_msg for more details.
+ *
+ * Because key versions newer than the current image rollback version are not
+ * available to clients, incrementing this version in the Trusty image results
+ * in a new set of keys being available that previous Trusty apps never had
+ * access to. This mechanism can be used to roll to new keys after patching a
+ * Trusty app vulnerability that may have exposed old keys. If the key
+ * derivation is implemented outside of Trusty entirely, then keys can be
+ * refreshed after a potential Trusty kernel compromise.
+ *
+ * Return: A negative return value indicates an error occurred sending the IPC
+ *         response back to the client.
+ */
+static int hwkey_handle_derive_versioned_key_cmd(
+        struct hwkey_chan_ctx* ctx,
+        struct hwkey_derive_versioned_msg* msg,
+        const uint8_t* context,
+        size_t context_len) {
+    int i;
+    int rc;
+    bool shared = msg->key_options & HWKEY_SHARED_KEY_TYPE;
+    uint32_t status;
+    size_t key_len;
+
+    key_len = msg->key_len;
+    if (key_len > HWKEY_MAX_MSG_SIZE - sizeof(*msg)) {
+        TLOGE("Key length (%zu) exceeds buffer length\n", key_len);
+        status = HWKEY_ERR_BAD_LEN;
+        goto send_response;
+    }
+
+    /*
+     * make sure to retrieve the current OS version before calling
+     * hwkey_derive_versioned_msg_compatible_with_unversioned() so that we
+     * derive the same key with CURRENT == 0 and 0 passed explicitly.
+     */
+
+    int os_rollback_version =
+            msg->rollback_versions[HWKEY_ROLLBACK_VERSION_OS_INDEX];
+    if (os_rollback_version == HWKEY_ROLLBACK_VERSION_CURRENT) {
+        os_rollback_version =
+                get_current_os_rollback_version(msg->rollback_version_source);
+        if (os_rollback_version < 0) {
+            status = HWKEY_ERR_GENERIC;
+            goto send_response;
+        }
+        msg->rollback_versions[HWKEY_ROLLBACK_VERSION_OS_INDEX] =
+                os_rollback_version;
+    }
+
+    for (i = HWKEY_ROLLBACK_VERSION_SUPPORTED_COUNT;
+         i < HWKEY_ROLLBACK_VERSION_INDEX_COUNT; ++i) {
+        if (msg->rollback_versions[i] != 0) {
+            TLOGE("Unsupported rollback version set: %d\n", i);
+            status = HWKEY_ERR_NOT_VALID;
+            goto send_response;
+        }
+    }
+
+    if (hwkey_derive_versioned_msg_compatible_with_unversioned(msg)) {
+        status = hwkey_handle_derive_key_impl(&msg->kdf_version, &ctx->uuid,
+                                              context, context_len, key_data,
+                                              key_len);
+        if (key_len == 0) {
+            /*
+             * derive_key_v1() doesn't support an empty key length, but we still
+             * want to allow querying key versions with NULL key and zero
+             * length. Reset the status to ok in this case.
+             */
+            status = HWKEY_NO_ERROR;
+        }
+        goto send_response;
+    }
+
+    /* check requested key derivation function */
+    if (msg->kdf_version == HWKEY_KDF_VERSION_BEST) {
+        msg->kdf_version = HWKEY_KDF_VERSION_1;
+    }
+
+    switch (msg->kdf_version) {
+    case HWKEY_KDF_VERSION_1:
+        status = derive_key_versioned_v1(&ctx->uuid, shared,
+                                         msg->rollback_version_source,
+                                         msg->rollback_versions, context,
+                                         context_len, key_data, key_len);
+        break;
+
+    default:
+        TLOGE("%u is unsupported KDF function\n", msg->kdf_version);
+        status = HWKEY_ERR_NOT_IMPLEMENTED;
+    }
+
+send_response:
+    if (status != HWKEY_NO_ERROR) {
+        msg->key_len = 0;
+    }
+
+    msg->header.status = status;
+    msg->header.cmd |= HWKEY_RESP_BIT;
+    rc = tipc_send2(ctx->chan, msg, sizeof(*msg), key_data, msg->key_len);
+    if (msg->key_len) {
+        /* sanitize key buffer */
+        memset(key_data, 0, sizeof(key_data));
     }
     return rc;
 }
@@ -375,34 +510,69 @@ static int hwkey_handle_derive_key_cmd(struct hwkey_chan_ctx* ctx,
 static int hwkey_chan_handle_msg(struct hwkey_chan_ctx* ctx) {
     int rc;
     size_t req_data_len;
-    struct hwkey_msg hdr;
+    struct hwkey_msg_header* hdr;
 
-    rc = tipc_recv_hdr_payload(ctx->chan, &hdr, sizeof(hdr), req_data,
-                               sizeof(req_data) - 1);
+    rc = tipc_recv1(ctx->chan, sizeof(*hdr), req_data, sizeof(req_data) - 1);
     if (rc < 0) {
         TLOGE("failed (%d) to recv msg from chan %d\n", rc, ctx->chan);
         return rc;
     }
 
-    /* calculate payload length */
-    req_data_len = (size_t)rc - sizeof(hdr);
+    req_data_len = (size_t)rc;
+
+    if (req_data_len < sizeof(*hdr)) {
+        TLOGE("Received too little data (%zu) from chan %d\n", req_data_len,
+              ctx->chan);
+        return ERR_BAD_LEN;
+    }
+
+    hdr = (struct hwkey_msg_header*)req_data;
 
     /* handle it */
-    switch (hdr.cmd) {
+    switch (hdr->cmd) {
     case HWKEY_GET_KEYSLOT:
         req_data[req_data_len] = 0; /* force zero termination */
-        rc = hwkey_handle_get_keyslot_cmd(ctx, &hdr, (const char*)req_data);
+        if (req_data_len < sizeof(struct hwkey_msg)) {
+            TLOGE("Received too little data (%zu) from chan %d\n", req_data_len,
+                  ctx->chan);
+            return ERR_BAD_LEN;
+        }
+        rc = hwkey_handle_get_keyslot_cmd(
+                ctx, (struct hwkey_msg*)req_data,
+                (const char*)(req_data + sizeof(struct hwkey_msg)));
         break;
 
     case HWKEY_DERIVE:
-        rc = hwkey_handle_derive_key_cmd(ctx, &hdr, req_data, req_data_len);
+        if (req_data_len < sizeof(struct hwkey_msg)) {
+            TLOGE("Received too little data (%zu) from chan %d\n", req_data_len,
+                  ctx->chan);
+            return ERR_BAD_LEN;
+        }
+        rc = hwkey_handle_derive_key_cmd(
+                ctx, (struct hwkey_msg*)req_data,
+                req_data + sizeof(struct hwkey_msg),
+                req_data_len - sizeof(struct hwkey_msg));
+        memset(req_data, 0, req_data_len); /* sanitize request buffer */
+        break;
+
+    case HWKEY_DERIVE_VERSIONED:
+        if (req_data_len < sizeof(struct hwkey_derive_versioned_msg)) {
+            TLOGE("Received too little data (%zu) from chan %d\n", req_data_len,
+                  ctx->chan);
+            return ERR_BAD_LEN;
+        }
+        rc = hwkey_handle_derive_versioned_key_cmd(
+                ctx, (struct hwkey_derive_versioned_msg*)req_data,
+                req_data + sizeof(struct hwkey_derive_versioned_msg),
+                req_data_len - sizeof(struct hwkey_derive_versioned_msg));
         memset(req_data, 0, req_data_len); /* sanitize request buffer */
         break;
 
     default:
-        TLOGE("Unsupported request: %d\n", (int)hdr.cmd);
-        hdr.status = HWKEY_ERR_NOT_IMPLEMENTED;
-        rc = hwkey_send_rsp(ctx, &hdr, NULL, 0);
+        TLOGE("Unsupported request: %d\n", (int)hdr->cmd);
+        hdr->status = HWKEY_ERR_NOT_IMPLEMENTED;
+        hdr->cmd |= HWKEY_RESP_BIT;
+        rc = tipc_send1(ctx->chan, hdr, sizeof(*hdr));
     }
 
     return rc;
@@ -605,8 +775,7 @@ int hwkey_start_service(void) {
     TLOGD("Start HWKEY service\n");
 
     /* Initialize service */
-    rc = port_create(HWKEY_PORT, 1,
-                     sizeof(struct hwkey_msg) + HWKEY_MAX_PAYLOAD_SIZE,
+    rc = port_create(HWKEY_PORT, 1, HWKEY_MAX_MSG_SIZE,
                      IPC_PORT_ALLOW_TA_CONNECT);
     if (rc < 0) {
         TLOGE("Failed (%d) to create port %s\n", rc, HWKEY_PORT);
