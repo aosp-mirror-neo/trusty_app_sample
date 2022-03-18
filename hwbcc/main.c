@@ -38,7 +38,7 @@ int main(void) {
 
     ops.init = swbcc_init;
     ops.close = swbcc_close;
-    ops.sign_mac = swbcc_sign_mac;
+    ops.sign_key = swbcc_sign_key;
     ops.get_bcc = swbcc_get_bcc;
     ops.get_dice_artifacts = swbcc_get_dice_artifacts;
     ops.ns_deprivilege = swbcc_ns_deprivilege;
