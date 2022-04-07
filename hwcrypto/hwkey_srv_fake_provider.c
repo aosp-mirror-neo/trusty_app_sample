@@ -395,6 +395,8 @@ err:
 
 /* UUID of HWCRYPTO_UNITTEST application */
 static const uuid_t hwcrypto_unittest_uuid = HWCRYPTO_UNITTEST_APP_UUID;
+static const uuid_t hwcrypto_unittest_rust_uuid =
+        HWCRYPTO_UNITTEST_RUST_APP_UUID;
 
 #if WITH_HWCRYPTO_UNITTEST
 /*
@@ -463,6 +465,7 @@ static uint32_t derived_keyslot_handler(const struct hwkey_keyslot* slot,
 
 static const uuid_t* unittest_allowed_opaque_key_uuids[] = {
         &hwcrypto_unittest_uuid,
+        &hwcrypto_unittest_rust_uuid,
 };
 
 static uint32_t get_unittest_key32_opaque(
@@ -816,6 +819,8 @@ static const uuid_t* allowed_clients[] = {
         /* Needs to derive keys even if it doesn't have test keyslots */
         &hwcrypto_unittest_uuid,
 
+        &hwcrypto_unittest_rust_uuid,
+
 #if WITH_HWCRYPTO_UNITTEST
         &hwaes_unittest_uuid,
 #endif
@@ -889,7 +894,18 @@ static const struct hwkey_keyslot _keys[] = {
                 .handler = get_unittest_key32_handler,
         },
         {
+                .uuid = &hwcrypto_unittest_rust_uuid,
+                .key_id = "com.android.trusty.hwcrypto.unittest.key32",
+                .handler = get_unittest_key32_handler,
+        },
+        {
                 .uuid = &hwcrypto_unittest_uuid,
+                .key_id = "com.android.trusty.hwcrypto.unittest.derived_key32",
+                .priv = &hwcrypto_unittest_derived_data,
+                .handler = derived_keyslot_handler,
+        },
+        {
+                .uuid = &hwcrypto_unittest_rust_uuid,
                 .key_id = "com.android.trusty.hwcrypto.unittest.derived_key32",
                 .priv = &hwcrypto_unittest_derived_data,
                 .handler = derived_keyslot_handler,
@@ -901,7 +917,19 @@ static const struct hwkey_keyslot _keys[] = {
                 .priv = &unittest_opaque_handle_data,
         },
         {
+                .uuid = &hwcrypto_unittest_rust_uuid,
+                .key_id = "com.android.trusty.hwcrypto.unittest.opaque_handle",
+                .handler = get_key_handle,
+                .priv = &unittest_opaque_handle_data,
+        },
+        {
                 .uuid = &hwcrypto_unittest_uuid,
+                .key_id = "com.android.trusty.hwcrypto.unittest.opaque_handle2",
+                .handler = get_key_handle,
+                .priv = &unittest_opaque_handle_data2,
+        },
+        {
+                .uuid = &hwcrypto_unittest_rust_uuid,
                 .key_id = "com.android.trusty.hwcrypto.unittest.opaque_handle2",
                 .handler = get_key_handle,
                 .priv = &unittest_opaque_handle_data2,
@@ -914,7 +942,20 @@ static const struct hwkey_keyslot _keys[] = {
                 .priv = &unittest_opaque_handle_data_noaccess,
         },
         {
+                .uuid = &hwcrypto_unittest_rust_uuid,
+                .key_id =
+                        "com.android.trusty.hwcrypto.unittest.opaque_handle_noaccess",
+                .handler = get_key_handle,
+                .priv = &unittest_opaque_handle_data_noaccess,
+        },
+        {
                 .uuid = &hwcrypto_unittest_uuid,
+                .key_id = "com.android.trusty.hwcrypto.unittest.opaque_derived",
+                .handler = get_key_handle,
+                .priv = &unittest_opaque_derived_data,
+        },
+        {
+                .uuid = &hwcrypto_unittest_rust_uuid,
                 .key_id = "com.android.trusty.hwcrypto.unittest.opaque_derived",
                 .handler = get_key_handle,
                 .priv = &unittest_opaque_derived_data,

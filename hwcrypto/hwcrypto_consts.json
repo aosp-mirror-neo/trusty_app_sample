@@ -12,6 +12,11 @@
             "type": "uuid"
         },
         {
+            "name": "HWCRYPTO_UNITTEST_RUST_APP_UUID",
+            "value": "7e15bb1a-571b-4404-9337-eeef60ed96e9",
+            "type": "uuid"
+        },
+        {
             "name": "SECURE_STORAGE_SERVER_APP_UUID",
             "value": "cea8706d-6cb4-49f3-b994-29e0e478bd29",
             "type": "uuid"
