@@ -55,6 +55,11 @@
             "name": "HWBCC_UNITTEST_APP_UUID",
             "value": "0e109d31-8bbe-47d6-bb47-e1dd08910e16",
             "type": "uuid"
+        },
+        {
+            "name": "HWBCC_UNITTEST_RUST_APP_UUID",
+            "value": "67925337-2c03-49ed-9240-d51b6fea3e30",
+            "type": "uuid"
         }
     ]
 }
