@@ -16,8 +16,6 @@
 
 #define TLOG_TAG "lender"
 
-#define TLOG_LVL TLOG_LVL_DEBUG
-
 #include <assert.h>
 
 #include <inttypes.h>
