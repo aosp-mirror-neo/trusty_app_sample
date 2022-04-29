@@ -20,6 +20,7 @@
     porttest("com.android.manifesttest"),
     porttest("com.android.memref.test"),
     porttest("com.android.timer-unittest"),
+    porttest("com.android.trusty.binder.test"),
     porttest("com.android.trusty.hwcrypto.test"),
     porttest("com.android.trusty.prebuilts.test"),
     porttest("com.android.trusty.swspi.test"),
