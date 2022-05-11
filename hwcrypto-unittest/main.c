@@ -482,7 +482,7 @@ TEST_F(hwkey, derive_different_versioned) {
                 .os_rollback_version = versioned_args.os_rollback_version - 1,
                 .context = src_data,
                 .context_len = sizeof(src_data),
-                .shared_key = false,
+                .shared_key = true,
                 .key = dest_shared2,
                 .key_len = sizeof(dest_shared2),
         };
