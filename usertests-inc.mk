@@ -26,6 +26,7 @@ TRUSTY_USER_TESTS += \
 	trusty/user/app/sample/spi/swspi-srv \
 	trusty/user/app/sample/spi/swspi-test \
 	trusty/user/app/sample/skel_rust \
+	trusty/user/app/sample/hwwsk \
 
 ifeq (true,$(call TOBOOL,$(USER_SCS_ENABLED)))
 TRUSTY_USER_TESTS += \
