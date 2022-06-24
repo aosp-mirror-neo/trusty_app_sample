@@ -605,7 +605,7 @@ TEST(AppMgrPortStartFail, PortStartFail) {
 
     /* Wait for kernel to shut down channel after failing to start app */
     chan = (handle_t)rc;
-    ASSERT_EQ(NO_ERROR, wait(chan, &uevt, WAIT_FOR_APP_SLEEP_NS));
+    ASSERT_EQ(NO_ERROR, wait(chan, &uevt, UNEXPECTED_TIMEOUT_MS));
     ASSERT_NE(0, IPC_HANDLE_POLL_HUP & uevt.event);
     close(chan);
 
