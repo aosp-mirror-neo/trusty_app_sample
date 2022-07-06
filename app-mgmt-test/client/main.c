@@ -599,15 +599,9 @@ TEST(AppMgrPortStartFail, PortStartFail) {
     ASSERT_NE(0, IPC_HANDLE_POLL_HUP & uevt.event);
     close(chan);
 
-    /* Try again to make sure we get the same error */
-    rc = chan = connect(START_FAIL_PORT, IPC_CONNECT_ASYNC);
-    ASSERT_GE(rc, 0);
-
-    /* Wait for kernel to shut down channel after failing to start app */
-    chan = (handle_t)rc;
-    ASSERT_EQ(NO_ERROR, wait(chan, &uevt, UNEXPECTED_TIMEOUT_MS));
-    ASSERT_NE(0, IPC_HANDLE_POLL_HUP & uevt.event);
-    close(chan);
+    /* Try again to make sure we get ERR_CANCELLED the second time */
+    rc = connect(START_FAIL_PORT, IPC_CONNECT_ASYNC);
+    ASSERT_EQ(ERR_CANCELLED, rc);
 
 test_abort:;
 }
