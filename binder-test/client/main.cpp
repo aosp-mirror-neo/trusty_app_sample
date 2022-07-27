@@ -23,10 +23,15 @@
 #include <trusty_unittest.h>
 #include <uapi/err.h>
 
-#include <ITestService.h>
+#include <com/android/trusty/binder/test/ITestService.h>
 
 using ::android::String16;
 using ::android::binder::Status;
+
+using com::android::trusty::binder::test::ByteEnum;
+using com::android::trusty::binder::test::IntEnum;
+using com::android::trusty::binder::test::ITestService;
+using com::android::trusty::binder::test::LongEnum;
 
 typedef struct {
     android::sp<android::RpcSession> sess;

@@ -29,10 +29,16 @@
 
 #include <binder/RpcServerTrusty.h>
 
-#include <BnTestService.h>
+#include <com/android/trusty/binder/test/BnTestService.h>
 
 using android::String16;
 using android::binder::Status;
+
+using com::android::trusty::binder::test::BnTestService;
+using com::android::trusty::binder::test::ByteEnum;
+using com::android::trusty::binder::test::IntEnum;
+using com::android::trusty::binder::test::ITestService;
+using com::android::trusty::binder::test::LongEnum;
 
 template <typename T>
 Status ReverseArray(const std::vector<T>& input,
