@@ -173,6 +173,38 @@ test_abort:
     bss_page[0] = 0;
 }
 
+TEST(memref, dup_map) {
+    volatile char* mbuf = NULL;
+    volatile char* dbuf = NULL;
+    handle_t dref = INVALID_IPC_HANDLE;
+    handle_t mref = memref_create(bss_page, PAGE_SIZE, MM_RW);
+    ASSERT_GT(mref, 0);
+
+    dref = dup(mref);
+    ASSERT_GT(dref, 0);
+
+    mbuf = mmap(0, PAGE_SIZE, MM_RW, 0, mref, 0);
+    ASSERT_NE((void*)mbuf, MAP_FAILED);
+
+    dbuf = mmap(0, PAGE_SIZE, MM_RW, 0, dref, 0);
+    ASSERT_NE((void*)dbuf, MAP_FAILED);
+
+    dbuf[0] = 42;
+    EXPECT_EQ(bss_page[0], 42);
+    EXPECT_EQ(mbuf[0], 42);
+
+test_abort:
+    if (dbuf && dbuf != MAP_FAILED) {
+        munmap((void*)dbuf, PAGE_SIZE);
+    }
+    if (mbuf && mbuf != MAP_FAILED) {
+        munmap((void*)mbuf, PAGE_SIZE);
+    }
+    close(dref);
+    close(mref);
+    bss_page[0] = 0;
+}
+
 #define EXPECT_CLOSE(e) \
 { \
     handle_t rc = e; \
@@ -201,16 +233,26 @@ TEST(memref, creation) {
     close(mref);
 }
 
-TEST(memref, recv_ref) {
+static void test_recv_ref(bool do_dup) {
     handle_t chan = INVALID_IPC_HANDLE;
     handle_t remote_memref = INVALID_IPC_HANDLE;
+    handle_t dup_memref = INVALID_IPC_HANDLE;
+    handle_t mmap_memref;
     volatile char* out = NULL;
     char remote_buf[1] = {0};
     ASSERT_EQ(lender_connect(&chan), 0);
     int rc = lender_lend_bss(chan, &remote_memref);
     ASSERT_EQ(rc, 0);
 
-    out = mmap(0, PAGE_SIZE, MM_RW, 0, remote_memref, 0);
+    if (do_dup) {
+        dup_memref = dup(remote_memref);
+        ASSERT_GE(dup_memref, 0);
+        mmap_memref = dup_memref;
+    } else {
+        mmap_memref = remote_memref;
+    }
+
+    out = mmap(0, PAGE_SIZE, MM_RW, 0, mmap_memref, 0);
     ASSERT_NE((void*)out, NULL);
 
     *out = 1;
@@ -229,8 +271,17 @@ TEST(memref, recv_ref) {
 
 test_abort:
     /* double close or INVALID_HANDLE should not cause an issue */
+    close(dup_memref);
     close(remote_memref);
     close(chan);
+}
+
+TEST(memref, recv_ref) {
+    test_recv_ref(false);
+}
+
+TEST(memref, dup_ref) {
+    test_recv_ref(true);
 }
 
 /*
