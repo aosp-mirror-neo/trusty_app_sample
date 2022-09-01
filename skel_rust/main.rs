@@ -15,14 +15,13 @@
  */
 
 #![allow(unused)]
-#![no_std]
 
 extern crate libc;
 extern crate tipc;
 use log::info;
+use std::io::{stdout, Write};
+use std::write;
 use system_state::{SystemState, SystemStateFlag};
-use trusty_std::io::{stdout, Write};
-use trusty_std::write;
 use trusty_sys::iovec;
 
 fn main() {
