@@ -28,7 +28,7 @@
 #define TLOG_TAG "timertest"
 
 static void __attribute__((noinline)) nop(void) {
-    static int i;
+    __UNUSED static int i;
     i++;
 }
 
