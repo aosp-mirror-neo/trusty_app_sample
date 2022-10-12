@@ -31,6 +31,7 @@
 
 #define TLOG_TAG "hwcrypto_unittest"
 
+#include <math.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -1137,6 +1138,68 @@ TEST(hwrng, var_rng_req_test) {
             continue;
         }
     }
+}
+
+/*
+ * This Test is NOT intended as a replacement for a proper NIST SP 800-22
+ * certification suites. It only attempts to detect detect gross misbehaviors of
+ * rng early on, at low computational costs while not being flaky. It is
+ * adapted from Section 2.13
+ */
+
+#define NB_RNG_QUERIES 1000
+#define LEN_BYTES_RNG_QUERIES 1024
+
+/*
+ * Standard Normal Cumulative Probability Distribution Function as defined in
+ * Section 5.5.3
+ */
+static double phi(double z) {
+    return 0.5 * (1.0 + erf(z / sqrt(2.0)));
+}
+
+TEST(hwrng, cumulative_sums_forward_test) {
+    /* n is as defined in NIST 800-22 Section 2.13.7 recommends >=100 */
+    const int64_t n = (NB_RNG_QUERIES * LEN_BYTES_RNG_QUERIES * 8);
+    int rc;
+    int S = 0;
+    size_t i, j, k;
+
+    /* largest absolute value of the partial sums */
+    int64_t z = 0;
+
+    for (i = 0; i < NB_RNG_QUERIES; i++) {
+        rc = trusty_rng_hw_rand(_rng_buf, LEN_BYTES_RNG_QUERIES);
+        EXPECT_EQ(NO_ERROR, rc, "hwrng test");
+        if (rc != NO_ERROR) {
+            TLOGI("trusty_rng_hw_rand returned %d\n", rc);
+            continue;
+        }
+        for (j = 0; j < LEN_BYTES_RNG_QUERIES; j++) {
+            for (k = 0; k < 8; k++) {
+                S += (_rng_buf[j] >> k) & 1 ? 1 : -1;
+                z = MAX(abs(S), z);
+            }
+        }
+    }
+    EXPECT_GT(n, 100,
+              "n as defined in NIST 800-22 Section 2.13.7 recommends >=100");
+
+    int64_t start = ((-(double)n / (double)z) + 1.0) / 4.0;
+    int64_t end = (((double)n / (double)z) + 1.0) / 4.0;
+    int64_t start2 = ((-(double)n / (double)z) - 3.0) / 4.0;
+    double p = 1.0;
+    for (int64_t k = start; k <= end; k++) {
+        p -= phi(((4.0 * k + 1.0) * z) / sqrt(n));
+        p += phi(((4.0 * k - 1.0) * z) / sqrt(n));
+    }
+    for (int64_t k = start2; k <= end; k++) {
+        p += phi(((4.0 * k + 3.0) * z) / sqrt(n));
+        p -= phi(((4.0 * k + 1.0) * z) / sqrt(n));
+    }
+    EXPECT_GT(
+            p, 0.01,
+            "NIST 800-22 - Section 2.13.5 Decision Rule (at the 1 Percent Level) ")
 }
 
 TEST(hwrng, stats_test) {
