@@ -27,6 +27,16 @@
             "type": "uuid"
         },
         {
+            "name": "KM_RUST_APP_UUID",
+            "value": "2e5415f0-d4d5-4a18-838f-29647dfc01d7",
+            "type": "uuid"
+        },
+        {
+            "name": "KM_RUST_UNITTEST_UUID",
+            "value": "d322eec9-6d03-49fa-821c-1ccd2705719c",
+            "type": "uuid"
+        },
+        {
             "name": "APPLOADER_APP_UUID",
             "value": "081ba88f-f1ee-452e-b5e8-a7e9ef173a97",
             "type": "uuid"

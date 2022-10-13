@@ -598,6 +598,14 @@ other_err:
 /* KM app uuid */
 static const uuid_t km_uuid = KM_APP_UUID;
 
+/* KM rust app uuid */
+static const uuid_t km_rust_uuid = KM_RUST_APP_UUID;
+
+#if TEST_BUILD
+/* KM rust unit test uuid */
+static const uuid_t km_rust_unittest_uuid = KM_RUST_UNITTEST_UUID;
+#endif
+
 static uint8_t kak_salt[KM_KAK_SIZE] = {
         0x70, 0xc4, 0x7c, 0xfa, 0x2c, 0xb1, 0xee, 0xdc, 0xa5, 0xdf, 0xbc,
         0x8d, 0xd4, 0xf7, 0x0d, 0x42, 0x93, 0x3b, 0x7f, 0x7b, 0xc2, 0x9e,
@@ -805,6 +813,10 @@ static const uuid_t* allowed_clients[] = {
         &ss_uuid,
         /* Needs to derive keys and access keyslot KM_KAK_ID */
         &km_uuid,
+        &km_rust_uuid,
+#if TEST_BUILD
+        &km_rust_unittest_uuid,
+#endif
         /* Needs access to opaque keys */
         &hwaes_uuid,
         /* Needs to derive keys */
@@ -854,6 +866,18 @@ static const struct hwkey_keyslot _keys[] = {
                 .key_id = KM_KAK_ID,
                 .handler = get_km_kak_key,
         },
+        {
+                .uuid = &km_rust_uuid,
+                .key_id = KM_KAK_ID,
+                .handler = get_km_kak_key,
+        },
+#if TEST_BUILD
+        {
+                .uuid = &km_rust_unittest_uuid,
+                .key_id = KM_KAK_ID,
+                .handler = get_km_kak_key,
+        },
+#endif
 #ifdef APPLOADER_SIGN_KEY_0
         {
                 .uuid = &apploader_uuid,
