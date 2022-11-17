@@ -7,6 +7,11 @@
             "type": "uuid"
         },
         {
+            "name": "HWAES_BENCH_APP_UUID",
+            "value": "9b424d86-9b1e-4755-942c-dca639de4289",
+            "type": "uuid"
+        },
+        {
             "name": "HWAES_UNITTEST_APP_UUID",
             "value": "ab8a6820-1cc2-44d5-bee0-22b51befa835",
             "type": "uuid"

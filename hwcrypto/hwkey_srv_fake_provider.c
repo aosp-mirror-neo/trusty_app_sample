@@ -635,6 +635,7 @@ static const uuid_t hwaes_uuid = SAMPLE_HWAES_APP_UUID;
 
 #if WITH_HWCRYPTO_UNITTEST
 static const uuid_t hwaes_unittest_uuid = HWAES_UNITTEST_APP_UUID;
+static const uuid_t hwaes_bench_uuid = HWAES_BENCH_APP_UUID;
 
 static const uuid_t* hwaes_unittest_allowed_opaque_key_uuids[] = {
         &hwaes_uuid,
@@ -830,11 +831,11 @@ static const uuid_t* allowed_clients[] = {
 
         /* Needs to derive keys even if it doesn't have test keyslots */
         &hwcrypto_unittest_uuid,
-
         &hwcrypto_unittest_rust_uuid,
 
 #if WITH_HWCRYPTO_UNITTEST
         &hwaes_unittest_uuid,
+        &hwaes_bench_uuid,
 #endif
         /* Needs to derive keys */
         &hwbcc_uuid,
@@ -986,6 +987,12 @@ static const struct hwkey_keyslot _keys[] = {
         },
         {
                 .uuid = &hwaes_unittest_uuid,
+                .key_id = "com.android.trusty.hwaes.unittest.opaque_handle",
+                .handler = get_key_handle,
+                .priv = &hwaes_unittest_opaque_handle_data,
+        },
+        {
+                .uuid = &hwaes_bench_uuid,
                 .key_id = "com.android.trusty.hwaes.unittest.opaque_handle",
                 .handler = get_key_handle,
                 .priv = &hwaes_unittest_opaque_handle_data,
