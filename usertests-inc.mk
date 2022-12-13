@@ -27,6 +27,9 @@ TRUSTY_USER_TESTS += \
 	trusty/user/app/sample/spi/swspi-test \
 	trusty/user/app/sample/skel_rust \
 
+TRUSTY_RUST_USER_TESTS += \
+	trusty/user/app/sample/memref-test/rust \
+
 ifeq (true,$(call TOBOOL,$(USER_SCS_ENABLED)))
 TRUSTY_USER_TESTS += \
 	trusty/user/app/sample/userscs-test/default \
@@ -63,4 +66,3 @@ TRUSTY_LOADABLE_USER_TASKS += \
 	trusty/user/app/sample/app-mgmt-test/restart-srv \
 	trusty/user/app/sample/app-mgmt-test/port-waiter-srv \
 	trusty/user/app/sample/storage-test \
-

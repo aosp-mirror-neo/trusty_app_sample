@@ -19,6 +19,7 @@
     porttest("com.android.appmgmt-unittest.appmngr"),
     porttest("com.android.manifesttest"),
     porttest("com.android.memref.test"),
+    porttest("com.android.trusty.rust.memref.test"),
     porttest("com.android.timer-unittest"),
     porttest("com.android.trusty.binder.test"),
     porttest("com.android.trusty.hwcrypto.test"),
