@@ -20,7 +20,6 @@
 
 enum lender_command {
     LENDER_LEND_BSS,
-    LENDER_LEND_RO,
     LENDER_LEND_RW,
     LENDER_SUICIDE,
     LENDER_READ_BSS,

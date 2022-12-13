@@ -42,15 +42,17 @@
 #define MAX_WRITE 0x800
 
 static __attribute__((aligned(PAGE_SIZE))) char bss_page[PAGE_SIZE];
-static __attribute__((aligned(PAGE_SIZE))) const char ro_page[PAGE_SIZE] = {1};
 static __attribute__((aligned(PAGE_SIZE))) char rw_page[PAGE_SIZE] = {1};
 
 #define MM_RW (MMAP_FLAG_PROT_READ | MMAP_FLAG_PROT_WRITE)
 
 static handle_t bss_memref = INVALID_IPC_HANDLE;
-static handle_t ro_memref = INVALID_IPC_HANDLE;
 static handle_t rw_memref = INVALID_IPC_HANDLE;
 
+/*
+ * This only creates bss_memref and rw_memref; creating a ro_memref would fail
+ * since RO segments are not backed by vmm_objs (b/149849862).
+ */
 static void init(void) {
     int rc = memref_create(bss_page, PAGE_SIZE, MM_RW);
     if (rc < 0) {
@@ -59,14 +61,6 @@ static void init(void) {
     }
 
     bss_memref = rc;
-
-    rc = memref_create((void*)ro_page, PAGE_SIZE, MMAP_FLAG_PROT_READ);
-    if (rc < 0) {
-        TLOGE("ro memref create failed: (%d)\n", rc);
-        /* TODO abort on failure once bug 149849862 is resolved */
-    } else {
-        ro_memref = rc;
-    }
 
     rc = memref_create(rw_page, PAGE_SIZE, MM_RW);
     if (rc < 0) {
@@ -97,9 +91,6 @@ static int lender_lend(handle_t chan, enum lender_command cmd) {
     switch (cmd) {
     case LENDER_LEND_BSS:
         to_lend = bss_memref;
-        break;
-    case LENDER_LEND_RO:
-        to_lend = ro_memref;
         break;
     case LENDER_LEND_RW:
         to_lend = rw_memref;
@@ -179,7 +170,6 @@ static int lender_on_message(const struct tipc_port* port,
 
     switch (msg.cmd) {
     case LENDER_LEND_BSS:
-    case LENDER_LEND_RO:
     case LENDER_LEND_RW:
         rc = lender_lend(chan, msg.cmd);
         if (rc < 0) {
