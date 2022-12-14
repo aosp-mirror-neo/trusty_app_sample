@@ -29,6 +29,7 @@ TRUSTY_USER_TESTS += \
 
 TRUSTY_RUST_USER_TESTS += \
 	trusty/user/app/sample/memref-test/rust \
+	trusty/user/app/sample/rust-hello-world \
 
 ifeq (true,$(call TOBOOL,$(USER_SCS_ENABLED)))
 TRUSTY_USER_TESTS += \
