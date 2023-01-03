@@ -17,6 +17,7 @@
 #include <sys/mman.h>
 #include <trusty/sys/mman.h>
 #include <trusty_unittest.h>
+#include <uapi/err.h>
 
 #define TEST1_ID 1
 #define TEST1_PHY_BASE_ADDR 0x70000000U
@@ -40,14 +41,16 @@ test_abort:;
 }
 
 bool compare_memory_map(uint8_t* va_base, uint64_t phy_addr, uint32_t size) {
+    const uint32_t flags = DMA_FLAG_FROM_DEVICE | DMA_FLAG_ALLOW_PARTIAL;
     int ret;
     struct dma_pmem pmem;
 
     ASSERT_NE(va_base, MAP_FAILED);
 
-    ret = prepare_dma((void*)va_base, size,
-                      DMA_FLAG_FROM_DEVICE | DMA_FLAG_ALLOW_PARTIAL, &pmem);
+    ret = prepare_dma((void*)va_base, size, flags, &pmem);
     ASSERT_EQ(ret, 1);
+    ret = finish_dma((void*)va_base, size, flags);
+    ASSERT_EQ(ret, NO_ERROR);
     ASSERT_NE(0, phy_addr);
     ASSERT_EQ(phy_addr, pmem.paddr);
     ASSERT_EQ(size, pmem.size);
