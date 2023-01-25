@@ -1,8 +1,8 @@
 #![cfg(test)]
 
 use crate::sys::{lender_msg, lender_region};
+use core::ffi::CStr;
 use tipc::{Deserialize, Handle, MMapFlags, Serialize, Serializer, TipcError, UnsafeSharedBuf};
-use trusty_std::ffi::CStr;
 
 #[allow(bad_style)]
 #[allow(dead_code)] // Needed because not all variants of the `lender_command` enum are used.
