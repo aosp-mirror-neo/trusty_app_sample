@@ -198,7 +198,7 @@ pub fn init_and_start_loop() -> Result<(), TipcError> {
 mod tests {
     use super::*;
     use test::{expect, expect_eq};
-    use trusty_std::ffi::CString;
+    use trusty_std::ffi::{CString, FallibleCString};
     //This line is needed in order to run the unit tests in Trusty
     test::init!();
 
