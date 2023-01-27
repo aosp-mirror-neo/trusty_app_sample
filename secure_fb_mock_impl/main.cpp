@@ -102,16 +102,15 @@ public:
         }
 
         fb_db_[0] = {
-                .fb_info =
-                        {
-                                .buffer = (uint8_t*)fb_base,
-                                .size = fb_size,
-                                .pixel_stride = 4,
-                                .line_stride = 4 * width,
-                                .width = width,
-                                .height = height,
-                                .pixel_format = TTUI_PF_RGBA8,
-                        },
+                .fb_info = {.buffer = (uint8_t*)fb_base,
+                            .size = fb_size,
+                            .pixel_stride = 4,
+                            .line_stride = 4 * width,
+                            .width = width,
+                            .height = height,
+                            .pixel_format = TTUI_PF_RGBA8,
+                            .rotation = TTUI_DRAW_ROTATION_0,
+                            .display_index = 0},
                 .buf_info = buf_info,
                 .handle = handle,
         };
