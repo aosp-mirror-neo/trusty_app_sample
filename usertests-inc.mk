@@ -27,6 +27,7 @@ TRUSTY_USER_TESTS += \
 	trusty/user/app/sample/spi/swspi-srv \
 	trusty/user/app/sample/spi/swspi-test \
 	trusty/user/app/sample/skel_rust \
+	trusty/user/app/sample/rust_no_std \
 
 TRUSTY_RUST_USER_TESTS += \
 	trusty/user/app/sample/memref-test/rust \
