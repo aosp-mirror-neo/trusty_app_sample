@@ -17,7 +17,7 @@
 #![no_std]
 
 use hwwsk::{HwWskReq, HWWSK_MAX_MSG_SIZE};
-use tipc::{Handle, Manager, PortCfg, Service, TipcError, Uuid};
+use tipc::{ConnectResult, Handle, Manager, MessageResult, PortCfg, Service, Uuid};
 use trusty_std::{self, vec};
 
 struct HwWskService;
@@ -31,11 +31,11 @@ impl Service for HwWskService {
         _port: &PortCfg,
         _handle: &Handle,
         _peer: &Uuid,
-    ) -> Result<Option<()>, TipcError> {
+    ) -> tipc::Result<ConnectResult<Self::Connection>> {
         /*
             TODO: implement any nuance of extant hwwsk service
         */
-        Ok(Some(()))
+        Ok(ConnectResult::Accept(()))
     }
 
     fn on_message(
@@ -43,7 +43,7 @@ impl Service for HwWskService {
         _connection: &Self::Connection,
         handle: &Handle,
         msg: Self::Message,
-    ) -> Result<bool, TipcError> {
+    ) -> tipc::Result<MessageResult> {
         /*
             TODO: this is a temporary placeholder for
             a reference implementation of the hwwsk service.
@@ -52,7 +52,8 @@ impl Service for HwWskService {
             - generate, import, or export key depending on request
         */
         let response = msg.response_from(0, vec![]);
-        handle.send(&response).map(|_| true)
+        handle.send(&response)?;
+        Ok(MessageResult::MaintainConnection)
     }
 }
 

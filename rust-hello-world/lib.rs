@@ -17,7 +17,8 @@
 use alloc::vec::Vec;
 use log::{error, info};
 use tipc::{
-    Deserialize, Handle, Manager, PortCfg, Serialize, Serializer, Service, TipcError, Uuid,
+    ConnectResult, Deserialize, Handle, Manager, MessageResult, PortCfg, Serialize, Serializer,
+    Service, TipcError, Uuid,
 };
 
 //Some constants that are useful to be predefined
@@ -117,9 +118,9 @@ impl Service for HelloWorldService {
         _port: &PortCfg,
         _handle: &Handle,
         _peer: &Uuid,
-    ) -> Result<Option<()>, TipcError> {
+    ) -> tipc::Result<ConnectResult<Self::Connection>> {
         info!("Connection to the Rust service!");
-        Ok(Some(()))
+        Ok(ConnectResult::Accept(()))
     }
     // This method is called when the service receives a message.
     // The manager handles the deserialization into msg, which is passed to this callback.
@@ -128,7 +129,7 @@ impl Service for HelloWorldService {
         _connection: &Self::Connection,
         handle: &Handle,
         msg: Self::Message,
-    ) -> Result<bool, TipcError> {
+    ) -> tipc::Result<MessageResult> {
         // msg holds our deserialized HelloWorldMessage struct. Here, we want to get
         // actual message out to create a response.
         let inputmsg = std::str::from_utf8(&msg.message).map_err(|e| {
@@ -149,9 +150,9 @@ impl Service for HelloWorldService {
             })?,
             message: outputmsg.as_bytes().to_vec(),
         })?;
-        // We return Ok(true) to keep the connection open.
-        // Returning an Ok(False) or an Err(_) will close the connection.
-        Ok(true)
+        // We keep the connection open by returning Ok(MaintainConnection).
+        // Returning an Ok(CloseConnection) or an Err(_) will close the connection.
+        Ok(MessageResult::MaintainConnection)
     }
 }
 
