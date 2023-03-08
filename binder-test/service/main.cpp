@@ -170,7 +170,7 @@ int main(void) {
     constexpr size_t max_msg_size = 256;
     auto srv = android::RpcServerTrusty::make(
             hset, ITestService::PORT().c_str(),
-            std::shared_ptr<const android::RpcServerTrusty::PortAcl>(&port_acl),
+            std::make_shared<const android::RpcServerTrusty::PortAcl>(port_acl),
             max_msg_size);
     if (!srv.ok()) {
         TLOGE("Failed to create RpcServer (%d)\n", srv.error());
