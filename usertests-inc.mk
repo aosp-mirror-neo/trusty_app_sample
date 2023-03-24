@@ -18,6 +18,7 @@ TRUSTY_USER_TESTS += \
 	trusty/user/app/sample/binder-test/client \
 	trusty/user/app/sample/binder-test/service \
 	trusty/user/app/sample/hwcrypto-unittest \
+	trusty/user/app/sample/hwrng-unittest \
 	trusty/user/app/sample/hwrng-bench \
 	trusty/user/app/sample/manifest-test \
 	trusty/user/app/sample/memref-test \
