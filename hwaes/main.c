@@ -283,15 +283,19 @@ static const uuid_t hwaes_unittest_uuid = HWAES_UNITTEST_APP_UUID;
 
 static const uuid_t hwaes_bench_uuid = HWAES_BENCH_APP_UUID;
 
+static const uuid_t internal_app_uuid = INTERNAL_APP_UUID;
+
 static const uuid_t* allowed_clients[] = {
         &apploader_uuid,
         &hwaes_bench_uuid,
         &hwaes_unittest_uuid,
+        &internal_app_uuid,
 };
 
 int main(void) {
     int rc;
     struct tipc_hset* hset;
+    TLOGE("hwaes server is using SW Crypto\n");
 
     hset = tipc_hset_create();
     if (IS_ERR(hset)) {
