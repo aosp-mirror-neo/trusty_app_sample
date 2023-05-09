@@ -83,7 +83,7 @@ TEST(hwrng, var_rng_req_test) {
 
 #define NB_RNG_QUERIES 1000
 #define LEN_BYTES_RNG_QUERIES 1024
-
+#define CUM_SUM_ERR_MSG_SZ 256
 /*
  * Standard Normal Cumulative Probability Distribution Function as defined in
  * Section 5.5.3
@@ -92,9 +92,17 @@ static double phi(double z) {
     return 0.5 * (1.0 + erf(z / sqrt(2.0)));
 }
 
-TEST(hwrng, cumulative_sums_forward_test) {
+/*
+ * This is the actual NIST Test as defined in NIST 800-22 Section 2.13. It
+ * will return NO_ERROR if and only if it succeeds, otherwise an error code.
+ */
+static int cumulative_sums_forward_test_helper(void) {
     /* n is as defined in NIST 800-22 Section 2.13.7 recommends >=100 */
     const int64_t n = (NB_RNG_QUERIES * LEN_BYTES_RNG_QUERIES * 8);
+    _Static_assert(
+            n >= 100,
+            "n as defined in NIST 800-22 Section 2.13.7 recommends >=100");
+
     int rc;
     int S = 0;
     size_t i, j, k;
@@ -104,10 +112,9 @@ TEST(hwrng, cumulative_sums_forward_test) {
 
     for (i = 0; i < NB_RNG_QUERIES; i++) {
         rc = trusty_rng_hw_rand(_rng_buf, LEN_BYTES_RNG_QUERIES);
-        EXPECT_EQ(NO_ERROR, rc, "hwrng test");
         if (rc != NO_ERROR) {
-            TLOGI("trusty_rng_hw_rand returned %d\n", rc);
-            continue;
+            TLOGE("trusty_rng_hw_rand returned %d", rc);
+            return rc;
         }
         for (j = 0; j < LEN_BYTES_RNG_QUERIES; j++) {
             for (k = 0; k < 8; k++) {
@@ -116,8 +123,6 @@ TEST(hwrng, cumulative_sums_forward_test) {
             }
         }
     }
-    EXPECT_GT(n, 100,
-              "n as defined in NIST 800-22 Section 2.13.7 recommends >=100");
 
     int64_t start = ((-(double)n / (double)z) + 1.0) / 4.0;
     int64_t end = (((double)n / (double)z) + 1.0) / 4.0;
@@ -131,9 +136,30 @@ TEST(hwrng, cumulative_sums_forward_test) {
         p += phi(((4.0 * k + 3.0) * z) / sqrt(n));
         p -= phi(((4.0 * k + 1.0) * z) / sqrt(n));
     }
-    EXPECT_GT(
-            p, 0.01,
-            "NIST 800-22 - Section 2.13.5 Decision Rule (at the 1 Percent Level) ")
+
+    if (p <= 0.01) {
+        trusty_unittest_printf(
+                "[   WARN   ] NIST 800-22 - Section 2.13.5 Decision Rule (at the 1 Percent Level)\n");
+        return ERR_GENERIC;
+    }
+
+    return NO_ERROR;
+}
+
+/*
+ * To avoid flakiness on real devices the actual NIST test is attempted 3 times.
+ * The helper which implements the Test as-is has ~1% failure rate.
+ */
+TEST(hwrng, cumulative_sums_forward_test) {
+    int ret = NO_ERROR;
+    int counter = 3;
+    do {
+        ret = cumulative_sums_forward_test_helper();
+    } while (ret && counter--);
+
+    EXPECT_EQ(
+            ret, NO_ERROR,
+            "NIST 800-22 - Section 2.13.5 criteria not met after 3 attempts.");
 }
 
 TEST(hwrng, stats_test) {
