@@ -7,7 +7,6 @@ use tipc::{Deserialize, Handle, MMapFlags, Serialize, Serializer, TipcError, Uns
 #[allow(bad_style)]
 #[allow(dead_code)] // Needed because not all variants of the `lender_command` enum are used.
 #[allow(deref_nullptr)] // https://github.com/rust-lang/rust-bindgen/issues/1651
-#[allow(unaligned_references)] // https://github.com/rust-lang/rust/issues/82523
 mod sys {
     include!(env!("BINDGEN_INC_FILE"));
 }

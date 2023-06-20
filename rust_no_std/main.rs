@@ -22,7 +22,6 @@
 
 #![no_std]
 #![feature(start)]
-#![feature(default_alloc_error_handler)]
 
 use core::panic::PanicInfo;
 use trusty_std::alloc::{FallibleVec, Vec};
