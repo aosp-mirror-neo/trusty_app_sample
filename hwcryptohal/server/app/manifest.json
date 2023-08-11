@@ -1,0 +1,6 @@
+{
+    "app_name": "hwcryptohalserver_app",
+    "uuid": "f49e28c4-d8b0-41c2-8197-11f27402c0f8",
+    "min_heap": 114688,
+    "min_stack": 32768
+}
