@@ -30,10 +30,19 @@ MODULE_LIBRARY_DEPS += \
 	frameworks/native/libs/binder/trusty/rust/rpcbinder \
 	trusty/user/app/sample/hwcryptohal/aidl/rust  \
 	trusty/user/app/sample/hwcryptohal/common  \
+	trusty/user/base/lib/keymint-rust/boringssl \
+	trusty/user/base/lib/keymint-rust/common \
+	trusty/user/base/lib/openssl-rust \
 	trusty/user/base/lib/tipc/rust \
 	trusty/user/base/lib/trusty-sys \
 	$(call FIND_CRATE,log) \
 	trusty/user/base/lib/trusty-log \
+	trusty/user/base/lib/trusty-std \
+
+MODULE_BINDGEN_ALLOW_FUNCTIONS := \
+	trusty_rng_.* \
+
+MODULE_BINDGEN_SRC_HEADER := $(LOCAL_DIR)/bindings.h
 
 MODULE_RUST_TESTS := true
 
