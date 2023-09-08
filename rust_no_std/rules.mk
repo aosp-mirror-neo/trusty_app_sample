@@ -27,7 +27,7 @@ MODULE_CRATE_NAME := no_std
 MODULE_LIBRARY_DEPS += \
 	trusty/user/base/lib/dlmalloc \
 	trusty/user/base/lib/trusty-std \
-	trusty/user/base/lib/libc-rust \
+	$(call FIND_CRATE,libc) \
 
 MODULE_ADD_IMPLICIT_DEPS := false
 
