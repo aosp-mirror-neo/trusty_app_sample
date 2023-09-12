@@ -17,3 +17,5 @@
 //! Module providing access to the cryptographic implementations used by the library.
 
 pub(crate) use crate::platform_functions::PlatformRng as RngImpl;
+pub(crate) use kmr_crypto_boring::aes::BoringAes as AesImpl;
+pub(crate) use kmr_crypto_boring::hmac::BoringHmac as HmacImpl;
