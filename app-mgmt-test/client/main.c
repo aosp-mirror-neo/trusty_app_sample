@@ -391,7 +391,8 @@ TEST(AppMgrWaitForPort, WaitConnectForPort) {
      */
     static bool skip = false;
     if (skip) {
-        trusty_unittest_printf("[  SKIPPED ]\n");
+        trusty_unittest_printf(
+                "[  SKIPPED ] Can't run second time without unloading.\n");
         return;
     }
     skip = true;
@@ -576,6 +577,18 @@ test_abort:
 
 /* Regular ports should not start an app on connection */
 TEST(AppMgrPortStartFail, PortStartFail) {
+    /*
+     * TODO: If no unloading, on the second run port is already in 'cancelled'
+     * state, so running the test second time makes no sense, just skip it.
+     */
+    static bool skip = false;
+    if (skip) {
+        trusty_unittest_printf(
+                "[  SKIPPED ] Can't run second time without unloading.\n");
+        return;
+    }
+    skip = true;
+
     int rc;
     handle_t chan = INVALID_IPC_HANDLE;
     uevent_t uevt;
