@@ -49,8 +49,9 @@ int main(void) {
         }
 
         rc = accept(uevt.handle, &peer_uuid);
-        if (rc == ERR_CHANNEL_CLOSED) {
-            continue; /* client already closed connection, nothing to do */
+        if (rc == ERR_CHANNEL_CLOSED || rc == ERR_NO_MSG) {
+            /* client already closed connection or no message, nothing to do */
+            continue;
         }
         if (rc < 0) {
             TLOGI("Accept failed %d\n", rc);
