@@ -48,6 +48,12 @@ pub enum HwCryptoError {
     CborError(kmr_wire::CborError),
 }
 
+impl HwCryptoError {
+    pub fn matches_hal_error_code(&self, error_code: i32) -> bool {
+        core::matches!(self, HwCryptoError::HalError { code, .. } if *code == error_code)
+    }
+}
+
 impl From<kmr_wire::CborError> for HwCryptoError {
     fn from(e: kmr_wire::CborError) -> Self {
         HwCryptoError::CborError(e)
