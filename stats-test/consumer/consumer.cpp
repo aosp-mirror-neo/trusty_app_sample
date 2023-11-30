@@ -122,10 +122,10 @@ int test_ctl_on_connect(const tipc_port* port,
         TLOGE("Couldn't make RPC session\n");
         return ERR_GENERIC;
     }
-    android::base::unique_fd chan_fd;
+    android::binder::unique_fd chan_fd;
     chan_fd.reset(rc);
     android::status_t status = sess->setupPreconnectedClient(
-            std::move(chan_fd), []() { return android::base::unique_fd(); });
+            std::move(chan_fd), []() { return android::binder::unique_fd(); });
     if (status != android::OK) {
         TLOGE("error during setupPreconnectedClient\n");
         return ERR_GENERIC;
