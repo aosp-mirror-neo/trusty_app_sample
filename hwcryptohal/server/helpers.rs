@@ -17,12 +17,14 @@
 //! Helper functions that includes data transformation for AIDL types.
 
 use android_hardware_security_see::aidl::android::hardware::security::see::hwcrypto::types::{
-    AesCipherMode::AesCipherMode, CipherModeParameters::CipherModeParameters, KeyType::KeyType,
-    KeyUse::KeyUse, SymmetricCryptoParameters::SymmetricCryptoParameters,
-    SymmetricOperation::SymmetricOperation,
+    AesCipherMode::AesCipherMode, AesKey::AesKey, CipherModeParameters::CipherModeParameters,
+    ExplicitKeyMaterial::ExplicitKeyMaterial, KeyType::KeyType, KeyUse::KeyUse,
+    SymmetricCryptoParameters::SymmetricCryptoParameters, SymmetricOperation::SymmetricOperation,
 };
 use hwcryptohal_common::{err::HwCryptoError, hwcrypto_err};
-use kmr_common::crypto::{self, SymmetricOperation as KmSymmetricOperation};
+use kmr_common::crypto::{
+    self, aes, KeyMaterial, OpaqueOr, SymmetricOperation as KmSymmetricOperation,
+};
 
 use crate::opaque_key::OpaqueKey;
 
@@ -60,6 +62,19 @@ macro_rules! cose_enum_gen {
                 let value: i64 = value.try_into()?;
                 Ok(value.try_into().map_err(|_| coset::CoseError::EncodeFailed)?)
             }
+        }
+    }
+}
+
+pub(crate) fn aidl_explicit_key_to_rust_key_material(
+    key_material: &ExplicitKeyMaterial,
+) -> Result<KeyMaterial, HwCryptoError> {
+    match key_material {
+        ExplicitKeyMaterial::Aes(AesKey::Aes128(km)) => {
+            Ok(KeyMaterial::Aes(OpaqueOr::Explicit(aes::Key::Aes128(*km))))
+        }
+        ExplicitKeyMaterial::Aes(AesKey::Aes256(km)) => {
+            Ok(KeyMaterial::Aes(OpaqueOr::Explicit(aes::Key::Aes256(*km))))
         }
     }
 }
