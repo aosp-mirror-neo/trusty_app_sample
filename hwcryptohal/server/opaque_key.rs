@@ -146,7 +146,7 @@ impl OpaqueKey {
     pub(crate) fn generate_opaque_key(
         policy: &KeyPolicy,
     ) -> binder::Result<binder::Strong<dyn IOpaqueKey>> {
-        let key_material = generate_key_material(&policy.keyType)?;
+        let key_material = generate_key_material(&policy.keyType, None)?;
         OpaqueKey::new_binder(policy, key_material)
     }
 }
@@ -273,6 +273,16 @@ pub(crate) fn check_key_material_with_policy(
     }
 }
 
+// Get key size in bytesgiven the backend AES key type. Used to check if we received enough bytes
+// from the caller for an AES key.
+fn get_aes_variant_key_size(variant: &crypto::aes::Variant) -> usize {
+    match variant {
+        crypto::aes::Variant::Aes128 => 16,
+        crypto::aes::Variant::Aes192 => 24,
+        crypto::aes::Variant::Aes256 => 32,
+    }
+}
+
 // Translating a policy AES `KeyType` into the type understood by the cryptographic backend we are
 // currently used
 // TODO: change this into a `TryFrom` once we refactor `KeyType` to be a newtype.
@@ -292,9 +302,40 @@ fn get_aes_variant(key_type: &KeyType) -> Result<crypto::aes::Variant, HwCryptoE
     }
 }
 
-// Use the cryptographic backend to create key material based on the policy `KeyType`. Because HMAC
-// keys can have arbitrary sizes, include an optional `key_size_bits` for that case.
-fn generate_key_material(key_type: &KeyType) -> Result<KeyMaterial, HwCryptoError> {
+// Return a keysize given a `KeyType`. Because HMAC key sizes can be defined by the
+// caller, `key_size_bits` is needed to cover all cases.
+pub(crate) fn get_key_size_in_bytes(key_type: &KeyType) -> Result<usize, HwCryptoError> {
+    match *key_type {
+        KeyType::AES_128_CBC_NO_PADDING
+        | KeyType::AES_128_CBC_PKCS7_PADDING
+        | KeyType::AES_128_CTR
+        | KeyType::AES_128_GCM
+        | KeyType::AES_128_CMAC => Ok(16),
+        KeyType::AES_256_CBC_NO_PADDING
+        | KeyType::AES_256_CBC_PKCS7_PADDING
+        | KeyType::AES_256_CTR
+        | KeyType::AES_256_GCM
+        | KeyType::AES_256_CMAC => Ok(32),
+        KeyType::HMAC_SHA256 => Ok(32),
+        KeyType::HMAC_SHA512 => Ok(64),
+        _ => unimplemented!("Only AES and HMAC has been implemented"),
+    }
+}
+
+fn key_vec_to_array<T, U: std::convert::TryInto<T>>(input: U) -> Result<T, HwCryptoError> {
+    input
+        .try_into()
+        .map_err(|_| hwcrypto_err!(BAD_PARAMETER, "couldn't transform vector into array"))
+}
+
+// Create a backend-compatible cryptographic key from either a provided vector of uniform random
+// bytes or, if this not provided, use the cryptographic backend to create it. The type is based on
+// the policy `KeyType`. Because HMAC keys can have arbitrary sizes, include an optional
+// `key_size_bits` for that case.
+pub(crate) fn generate_key_material(
+    key_type: &KeyType,
+    key_random_bytes: Option<Vec<u8>>,
+) -> Result<KeyMaterial, HwCryptoError> {
     let aes = crypto_provider::AesImpl;
     let hmac = crypto_provider::HmacImpl;
     let mut rng = crypto_provider::RngImpl::default();
@@ -310,13 +351,56 @@ fn generate_key_material(key_type: &KeyType) -> Result<KeyMaterial, HwCryptoErro
         | KeyType::AES_256_GCM
         | KeyType::AES_256_CMAC => {
             let variant = get_aes_variant(key_type)?;
-            Ok(aes.generate_key(&mut rng, variant, &[])?)
+            if let Some(key_bytes) = key_random_bytes {
+                if key_bytes.len() != get_aes_variant_key_size(&variant) {
+                    return Err(hwcrypto_err!(
+                        BAD_PARAMETER,
+                        "for aes key needed {} bytes, received {}",
+                        key_bytes.len(),
+                        get_aes_variant_key_size(&variant)
+                    ));
+                }
+                match variant {
+                    crypto::aes::Variant::Aes128 => Ok(KeyMaterial::Aes(
+                        crypto::aes::Key::Aes128(key_vec_to_array(key_bytes)?).into(),
+                    )),
+                    crypto::aes::Variant::Aes192 => Err(hwcrypto_err!(
+                        BAD_PARAMETER,
+                        "AES keys of length 192 are not supported",
+                    )),
+                    crypto::aes::Variant::Aes256 => Ok(KeyMaterial::Aes(
+                        crypto::aes::Key::Aes256(key_vec_to_array(key_bytes)?).into(),
+                    )),
+                }
+            } else {
+                Ok(aes.generate_key(&mut rng, variant, &[])?)
+            }
         }
-        KeyType::HMAC_SHA256 => {
-            Ok(hmac.generate_key(&mut rng, kmr_wire::KeySizeInBits(256), &[])?)
-        }
-        KeyType::HMAC_SHA512 => {
-            Ok(hmac.generate_key(&mut rng, kmr_wire::KeySizeInBits(512), &[])?)
+        KeyType::HMAC_SHA256 | KeyType::HMAC_SHA512 => {
+            let key_size_bytes = get_key_size_in_bytes(key_type)?;
+            if let Some(key_bytes) = key_random_bytes {
+                if key_bytes.len() != key_size_bytes {
+                    Err(hwcrypto_err!(
+                        BAD_PARAMETER,
+                        "for hmac key needed {} bytes, received {}",
+                        key_bytes.len(),
+                        key_size_bytes
+                    ))
+                } else {
+                    Ok(KeyMaterial::Hmac(crypto::hmac::Key::new(key_bytes).into()))
+                }
+            } else {
+                Ok(hmac.generate_key(
+                    &mut rng,
+                    kmr_wire::KeySizeInBits((key_size_bytes * 8).try_into().map_err(|_| {
+                        hwcrypto_err!(
+                            GENERIC_ERROR,
+                            "shouldn't happen, key_size_bytes * 8 should fit on an u32"
+                        )
+                    })?),
+                    &[],
+                )?)
+            }
         }
         _ => unimplemented!("key material other than AES and HMAC not implemented yet"),
     }
@@ -345,7 +429,7 @@ mod tests {
             keyType: key_type,
             keyManagementKey: false,
         };
-        let key_material = generate_key_material(&policy.keyType);
+        let key_material = generate_key_material(&policy.keyType, None);
         expect!(key_material.is_ok(), "couldn't retrieve key material");
         let key_material = key_material.unwrap();
         let check_result = check_key_material_with_policy(&key_material, &policy);

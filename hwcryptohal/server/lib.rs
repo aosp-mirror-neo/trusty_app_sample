@@ -22,9 +22,11 @@ pub mod hwcrypto_ipc_server;
 
 mod crypto_provider;
 mod ffi_bindings;
+mod helpers;
 mod hwcrypto_device_key;
 mod opaque_key;
 mod platform_functions;
+mod service_encryption_key;
 
 #[cfg(test)]
 mod tests {

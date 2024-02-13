@@ -604,7 +604,14 @@ static const uuid_t km_rust_uuid = KM_RUST_APP_UUID;
 #if TEST_BUILD
 /* KM rust unit test uuid */
 static const uuid_t km_rust_unittest_uuid = KM_RUST_UNITTEST_UUID;
+
+/* HWCrypto HAL rust unit test uuid */
+static const uuid_t hwcryptohal_rust_unittest_uuid =
+        HWCRYPTOHAL_UNITTEST_RUST_APP_UUID;
 #endif
+
+/* HWCrypto HAL rust unit test uuid */
+static const uuid_t hwcryptohal_rust_uuid = HWCRYPTOHAL_RUST_APP_UUID;
 
 static uint8_t kak_salt[KM_KAK_SIZE] = {
         0x70, 0xc4, 0x7c, 0xfa, 0x2c, 0xb1, 0xee, 0xdc, 0xa5, 0xdf, 0xbc,
@@ -817,7 +824,10 @@ static const uuid_t* allowed_clients[] = {
         &km_rust_uuid,
 #if TEST_BUILD
         &km_rust_unittest_uuid,
+        /*HWCrypto HAL needs to derive key and access keylots*/
+        &hwcryptohal_rust_unittest_uuid,
 #endif
+        &hwcryptohal_rust_uuid,
         /* Needs access to opaque keys */
         &hwaes_uuid,
         /* Needs to derive keys */

@@ -30,6 +30,7 @@ MODULE_LIBRARY_DEPS += \
 	frameworks/native/libs/binder/trusty/rust/rpcbinder \
 	trusty/user/app/sample/hwcryptohal/aidl/rust  \
 	trusty/user/app/sample/hwcryptohal/common  \
+	trusty/user/base/lib/hwkey/rust \
 	trusty/user/base/lib/keymint-rust/boringssl \
 	trusty/user/base/lib/keymint-rust/common \
 	trusty/user/base/lib/openssl-rust \
