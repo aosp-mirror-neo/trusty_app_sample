@@ -19,7 +19,7 @@ MODULE := $(LOCAL_DIR)
 
 MANIFEST := $(LOCAL_DIR)/manifest.json
 
-CONSTANTS := \
+MODULE_CONSTANTS := \
 	$(LOCAL_DIR)/../include/consumer_consts.json \
 	$(LOCAL_DIR)/../include/relayer_consts.json \
 
