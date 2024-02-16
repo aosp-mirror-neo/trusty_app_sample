@@ -27,7 +27,7 @@ MODULE_CRATE_NAME := hwwsk
 MODULE_LIBRARY_DEPS += \
 	trusty/user/base/interface/hwwsk \
 	trusty/user/base/lib/hwwsk/rust \
-	$(call FIND_CRATE,log) \
+	trusty/user/base/lib/log-rust \
 	trusty/user/base/lib/trusty-log \
 	trusty/user/base/lib/tipc/rust \
 	trusty/user/base/lib/trusty-std \

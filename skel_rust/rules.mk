@@ -25,8 +25,8 @@ MODULE_SRCS += \
 MODULE_CRATE_NAME := skel
 
 MODULE_LIBRARY_DEPS += \
-	$(call FIND_CRATE,libc) \
-	$(call FIND_CRATE,log) \
+	trusty/user/base/lib/libc-rust \
+	trusty/user/base/lib/log-rust \
 	trusty/user/base/lib/system_state/rust \
 	trusty/user/base/lib/tipc/rust \
 	trusty/user/base/lib/trusty-log \
