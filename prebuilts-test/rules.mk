@@ -24,6 +24,9 @@ MODULE_SRCS += \
 MODULE_LIBRARY_DEPS += \
 	trusty/user/base/lib/unittest \
 
+# Disable config options that affect ABI to avoid needing multiple prebuilts
+MODULE_DISABLE_BTI := true
+
 #BUILD_FROM_SOURCE := true
 
 ifeq (true,$(call TOBOOL,$(BUILD_FROM_SOURCE)))
