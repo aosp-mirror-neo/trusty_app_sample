@@ -33,36 +33,19 @@ use android_hardware_security_see::aidl::android::hardware::security::see::hwcry
     KeyPolicy::KeyPolicy,
 };
 use android_hardware_security_see::binder;
-use binder::StatusCode;
 use ciborium::{cbor, Value};
 use coset::{AsCborValue, CborSerializable, CoseError};
-use hwcryptohal_common::{err::HwCryptoError, hwcrypto_err};
+use hwcryptohal_common::{cose_enum_gen, err::HwCryptoError, hwcrypto_err};
 use hwkey::{Hwkey, KdfVersion};
 use tipc::Uuid;
 
 use crate::hwcrypto_operations::HwCryptoOperations;
 
-use crate::cose_enum_gen;
 use crate::helpers;
-use crate::opaque_key::{self, OpaqueKey};
+use crate::opaque_key::{self, DerivationContext, HkdfOperationType, OpaqueKey};
 use crate::service_encryption_key::{self, EncryptionHeader};
 
 const DEVICE_KEY_CTX: &[u8] = b"device_key_derivation_contextKEK";
-const DICE_BOUND_POLICY_CTX: &[u8] = b"dice_bound";
-
-const OPAQUE_KEY_CTX: &[u8] = b"opaque";
-const CLEAR_KEY_CTX: &[u8] = b"cleark";
-const OPAQUE_CLEAR_CTX_SIZE: usize = 6;
-
-// Checking that both context have the same size and it is equal to `OPAQUE_CLEAR_CTX_SIZE`
-const _: () = assert!(
-    (OPAQUE_KEY_CTX.len() == OPAQUE_CLEAR_CTX_SIZE),
-    "opaque context size must match OPAQUE_CLEAR_CTX_SIZE"
-);
-const _: () = assert!(
-    (CLEAR_KEY_CTX.len() == OPAQUE_CLEAR_CTX_SIZE),
-    "clear context size must match OPAQUE_CLEAR_CTX_SIZE"
-);
 
 // enum used for serializing the `VersionContext`
 cose_enum_gen! {
@@ -226,11 +209,9 @@ impl HwCryptoKey {
         // Getting back a stable DICE policy for context, so keys derived with the same version will
         // match
         let dice_context = VersionContext::get_stable_context(dice_policy_for_key_version)?;
-        let mut concat_context = Vec::<u8>::new();
-        concat_context.try_reserve(DICE_BOUND_POLICY_CTX.len())?;
-        concat_context.extend_from_slice(DICE_BOUND_POLICY_CTX);
-        concat_context.try_reserve(dice_context.len())?;
-        concat_context.extend_from_slice(dice_context.as_slice());
+        let mut op_context = DerivationContext::new(HkdfOperationType::DiceBoundDerivation)?;
+        op_context.add_owned_binary_string(dice_context)?;
+        let concat_context = op_context.create_key_derivation_context()?;
 
         // The returned key will only be used for derivation, so fixing tis type to HMAC_SHA256
         let key_type = KeyType::HMAC_SHA256;
@@ -255,12 +236,12 @@ impl HwCryptoKey {
 
                 session_req
                     .kdf(KdfVersion::Best)
-                    .derive(&concat_context, &mut derived_key[..])
+                    .derive(concat_context.as_slice(), &mut derived_key[..])
                     .map_err(|e| hwcrypto_err!(GENERIC_ERROR, "failed to derive key {:?}", e))?;
 
                 let policy = KeyPolicy {
                     usage: KeyUse::DERIVE,
-                    keyLifetime: KeyLifetime::EPHEMERAL,
+                    keyLifetime: KeyLifetime::HARDWARE,
                     keyPermissions: Vec::new(),
                     keyType: key_type,
                     keyManagementKey: false,
@@ -329,14 +310,8 @@ impl IHwCryptoKey for HwCryptoKey {
             ))?
             .try_into()?;
 
-        let mut concat_context = Vec::<u8>::new();
-        concat_context.try_reserve(parameters.context.len()).map_err(|_| StatusCode::NO_MEMORY)?;
-        concat_context.extend_from_slice(&parameters.context);
-        concat_context.try_reserve(OPAQUE_CLEAR_CTX_SIZE).map_err(|_| StatusCode::NO_MEMORY)?;
-
         match &parameters.keyPolicy {
             DerivedKeyPolicy::ClearKey(clear_policy) => {
-                concat_context.extend_from_slice(CLEAR_KEY_CTX);
                 // Adding key size to the context as well for a similar reason as to add the key
                 // policy to the context.
                 let key_size = clear_policy.keySizeBytes.try_into().map_err(|_| {
@@ -345,33 +320,15 @@ impl IHwCryptoKey for HwCryptoKey {
                         Some("shouldn't happen, we checked that keySize was positive"),
                     )
                 })?;
-                // A u32 fits on a usize on the architectures we use, so conversion is correct
-                if key_size > (u32::MAX as usize) {
-                    return Err(binder::Status::new_exception_str(
-                        binder::ExceptionCode::UNSUPPORTED_OPERATION,
-                        Some("requested key size was too big"),
-                    ));
-                }
-                let key_size_as_bytes = (key_size as u32).to_le_bytes();
-                concat_context
-                    .try_reserve(key_size_as_bytes.len())
-                    .map_err(|_| StatusCode::NO_MEMORY)?;
-                concat_context.extend_from_slice(&key_size_as_bytes[..]);
 
-                let derived_key =
-                    derivation_key.derive_raw_key_material(concat_context.as_slice(), key_size)?;
+                let derived_key = derivation_key
+                    .derive_clear_key_material(parameters.context.as_slice(), key_size)?;
                 Ok(DerivedKey::ExplicitKey(derived_key))
             }
             DerivedKeyPolicy::OpaqueKey(key_policy) => {
-                concat_context.extend_from_slice(OPAQUE_KEY_CTX);
-                // TODO: Add keyPolicy to the context to mitigate attacks trying to use the same
-                //       generated key material under different algorithms.
-                let _derived_key =
-                    derivation_key.derive_key(key_policy, concat_context.as_slice())?;
-                Err(binder::Status::new_exception_str(
-                    binder::ExceptionCode::UNSUPPORTED_OPERATION,
-                    Some("cannot return opaque keys until we add its policy to context"),
-                ))
+                let derived_key =
+                    derivation_key.derive_opaque_key(key_policy, parameters.context.as_slice())?;
+                Ok(DerivedKey::Opaque(Some(derived_key)))
             }
         }
     }
