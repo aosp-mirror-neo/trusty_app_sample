@@ -13,6 +13,8 @@
 # limitations under the License.
 #
 
+ifeq ($(call TOBOOL,$(ARCH_$(ARCH)_SUPPORTS_RUST)),true)
+
 LOCAL_DIR := $(GET_LOCAL_DIR)
 
 MODULE := $(LOCAL_DIR)
@@ -32,3 +34,5 @@ MODULE_LIBRARY_DEPS += \
 MODULE_ADD_IMPLICIT_DEPS := false
 
 include make/trusted_app.mk
+
+endif
