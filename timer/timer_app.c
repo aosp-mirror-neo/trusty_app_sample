@@ -37,10 +37,13 @@ struct timer_unittest {
     bool loop;
 };
 
+/* Timer constants (nanoseconds) */
+#define ONE_US (1000ULL)
+#define ONE_MS (1000ULL * ONE_US)
+#define ONE_S (1000ULL * ONE_MS)
+
 #define TIMER_TEST_NOP_LOOP_COUNT (100000000)
-#define ONE_MS (1000 * 1000ULL)
 #define TIMER_TEST_MS_SLEEP_LOOP_COUNT (1000)
-#define ONE_S (1000 * ONE_MS)
 
 static void check_timestamps(int64_t t1,
                              int64_t delta_min,
@@ -94,7 +97,42 @@ static bool timer_test(struct unittest* test) {
     bool passed;
 
     do {
-        passed = RUN_ALL_TESTS();
+        passed = RUN_ALL_SUITE_TESTS("TimerTest");
+    } while (timer_test->loop);
+
+    return passed;
+}
+
+/* Repeatedly expire a 1 micro-second timer for about 60 seconds */
+TEST(TimerStressTest, NanoSleepStressTestSixtySeconds) {
+    int64_t end = 0, now = 0;
+    int i, remaining, last_remaining = 0;
+
+    trusty_gettime(0, &now);
+    end = now + (ONE_S * 60);
+
+    while (now < end) {
+        remaining = (end - now) / ONE_S;
+        if (remaining != last_remaining) {
+            trusty_unittest_printf("[   INFO   ] remaining %ds\n", remaining);
+            last_remaining = remaining;
+        }
+
+        for (i = 0; i < 8192; i++) {
+            trusty_nanosleep(0, 0, ONE_US);
+        }
+
+        trusty_gettime(0, &now);
+    }
+}
+
+static bool timer_stress_test(struct unittest* test) {
+    struct timer_unittest* timer_test =
+            containerof(test, struct timer_unittest, unittest);
+    bool passed;
+
+    do {
+        passed = RUN_ALL_SUITE_TESTS("TimerStressTest");
     } while (timer_test->loop);
 
     return passed;
@@ -103,7 +141,7 @@ static bool timer_test(struct unittest* test) {
 #define PORT_BASE "com.android.timer-unittest"
 
 int main(void) {
-    static struct timer_unittest timer_unittests[2] = {
+    static struct timer_unittest timer_unittests[] = {
             {
                     .unittest =
                             {
@@ -120,7 +158,14 @@ int main(void) {
                             },
                     .loop = true,
             },
-    };
+            {
+                    .unittest =
+                            {
+                                    .port_name = PORT_BASE ".stress",
+                                    .run_test = timer_stress_test,
+                            },
+                    .loop = false,
+            }};
     static struct unittest* unittests[countof(timer_unittests)];
 
     for (size_t i = 0; i < countof(timer_unittests); i++) {
