@@ -25,8 +25,8 @@ MODULE_SRCS += \
 MODULE_CRATE_NAME := hello_world_in_rust_app
 
 MODULE_LIBRARY_DEPS += \
-	$(call FIND_CRATE,libc) \
-	$(call FIND_CRATE,log) \
+	trusty/user/base/lib/libc-rust \
+	trusty/user/base/lib/log-rust \
 	trusty/user/base/lib/tipc/rust \
 	trusty/user/base/lib/trusty-log \
 	trusty/user/app/sample/rust-hello-world \
