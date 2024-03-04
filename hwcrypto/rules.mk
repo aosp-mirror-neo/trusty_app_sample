@@ -74,6 +74,8 @@ MODULE_COMPILEFLAGS += \
 	-DAPPLOADER_ENCRYPT_KEY_1_FILE=\"$(APPLOADER_ENCRYPT_KEY_1_FILE)\"
 endif
 
+ifeq (true,$(call TOBOOL,$(WITH_FAKE_KEYBOX)))
 include $(LOCAL_DIR)/keybox/rules.mk
+endif
 
 include make/trusted_app.mk
