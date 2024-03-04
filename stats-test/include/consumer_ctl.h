@@ -23,7 +23,9 @@
 
 using namespace android::frameworks::stats;
 
+#ifndef PAGE_SIZE
 #define PAGE_SIZE 0x1000
+#endif
 #define TIME_OUT_INTERVAL_MS 10
 #define MS_TO_NS(x) ((x)*1000000ULL)
 
