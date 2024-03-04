@@ -19,7 +19,7 @@ MODULE := $(LOCAL_DIR)
 
 MANIFEST := $(LOCAL_DIR)/manifest.json
 
-CONSTANTS := $(LOCAL_DIR)/../include/app_mgmt_port_consts.json
+MODULE_CONSTANTS := $(LOCAL_DIR)/../include/app_mgmt_port_consts.json
 
 BOOT_START_APP  := $(TRUSTY_APP_BUILDDIR)/trusty/user/app/sample/app-mgmt-test/boot-start-srv/boot-start-srv.app
 NEVER_START_APP := $(TRUSTY_APP_BUILDDIR)/trusty/user/app/sample/app-mgmt-test/never-start-srv/never-start-srv.app

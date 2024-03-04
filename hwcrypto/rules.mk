@@ -20,7 +20,7 @@ MODULE := $(LOCAL_DIR)
 
 MANIFEST := $(LOCAL_DIR)/manifest.json
 
-CONSTANTS := $(LOCAL_DIR)/hwcrypto_consts.json
+MODULE_CONSTANTS := $(LOCAL_DIR)/hwcrypto_consts.json
 
 MODULE_INCLUDES := $(LOCAL_DIR)/include
 
