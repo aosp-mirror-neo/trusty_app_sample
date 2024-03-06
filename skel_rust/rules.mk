@@ -13,6 +13,8 @@
 # limitations under the License.
 #
 
+ifeq ($(call TOBOOL,$(ARCH_$(ARCH)_SUPPORTS_RUST)),true)
+
 LOCAL_DIR := $(GET_LOCAL_DIR)
 
 MODULE := $(LOCAL_DIR)
@@ -25,8 +27,8 @@ MODULE_SRCS += \
 MODULE_CRATE_NAME := skel
 
 MODULE_LIBRARY_DEPS += \
-	trusty/user/base/lib/libc-rust \
-	trusty/user/base/lib/log-rust \
+	$(call FIND_CRATE,libc) \
+	$(call FIND_CRATE,log) \
 	trusty/user/base/lib/system_state/rust \
 	trusty/user/base/lib/tipc/rust \
 	trusty/user/base/lib/trusty-log \
@@ -34,3 +36,5 @@ MODULE_LIBRARY_DEPS += \
 MODULE_RUSTFLAGS += -Z unstable-options \
 
 include make/trusted_app.mk
+
+endif

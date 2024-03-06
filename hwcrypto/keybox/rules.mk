@@ -16,7 +16,7 @@
 
 MODULE_SRCS += \
 	$(LOCAL_DIR)/keybox/srv.c \
-	$(LOCAL_DIR)/keybox/keybox.c \
+	$(LOCAL_DIR)/keybox/keybox_fake_provider.c \
 
 MODULE_LIBRARY_DEPS += \
 	trusty/user/base/lib/libc-trusty \

@@ -172,13 +172,12 @@ int main(void) {
             hset, ITestService::PORT().c_str(),
             std::make_shared<const android::RpcServerTrusty::PortAcl>(port_acl),
             max_msg_size);
-    if (!srv.ok()) {
-        TLOGE("Failed to create RpcServer (%d)\n", srv.error());
+    if (srv == nullptr) {
         return EXIT_FAILURE;
     }
 
     android::sp<TestService> test_srv = android::sp<TestService>::make();
-    (*srv)->setRootObject(test_srv);
+    srv->setRootObject(test_srv);
 
     return tipc_run_event_loop(hset);
 }
