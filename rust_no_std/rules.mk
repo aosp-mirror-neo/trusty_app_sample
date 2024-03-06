@@ -13,6 +13,8 @@
 # limitations under the License.
 #
 
+ifeq ($(call TOBOOL,$(ARCH_$(ARCH)_SUPPORTS_RUST)),true)
+
 LOCAL_DIR := $(GET_LOCAL_DIR)
 
 MODULE := $(LOCAL_DIR)
@@ -27,8 +29,10 @@ MODULE_CRATE_NAME := no_std
 MODULE_LIBRARY_DEPS += \
 	trusty/user/base/lib/dlmalloc \
 	trusty/user/base/lib/trusty-std \
-	trusty/user/base/lib/libc-rust \
+	$(call FIND_CRATE,libc) \
 
 MODULE_ADD_IMPLICIT_DEPS := false
 
 include make/trusted_app.mk
+
+endif

@@ -40,7 +40,7 @@ typedef struct {
 
 static void BinderTest_SetUp(BinderTest_t* state) {
     int rc;
-    android::base::unique_fd chan;
+    android::binder::unique_fd chan;
     android::status_t status;
     android::sp<android::IBinder> root;
 
@@ -53,7 +53,7 @@ static void BinderTest_SetUp(BinderTest_t* state) {
     ASSERT_NE(nullptr, state->sess.get());
 
     status = state->sess->setupPreconnectedClient(
-            std::move(chan), []() { return android::base::unique_fd(); });
+            std::move(chan), []() { return android::binder::unique_fd(); });
     ASSERT_EQ(android::OK, status);
 
     root = state->sess->getRootObject();

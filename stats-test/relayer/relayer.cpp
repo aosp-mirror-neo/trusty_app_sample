@@ -162,11 +162,10 @@ int main(void) {
             hset, RELAYER_PORT_ISTATS,
             std::make_shared<const RpcServerTrusty::PortAcl>(portAcl_TA),
             maxMsgSize);
-    if (!srvIStats.ok()) {
-        TLOGE("Failed to create RpcServer (%d)\n", srvIStats.error());
+    if (srvIStats == nullptr) {
         return EXIT_FAILURE;
     }
-    (*srvIStats)->setRootObject(statsRelayer);
+    srvIStats->setRootObject(statsRelayer);
 
     // expose the test port for the NW accessible IStatsSetter interface
     // trusty::stats::setter::IStatsSetter
@@ -174,23 +173,19 @@ int main(void) {
             hset, RELAYER_PORT_ISTATS_SETTER_NORMAL_WORLD,
             std::make_shared<const RpcServerTrusty::PortAcl>(portAcl_NS),
             maxMsgSize);
-    if (!srvIStatsSetterNormalWorld.ok()) {
-        TLOGE("Failed to create RpcServer (%d)\n",
-              srvIStatsSetterNormalWorld.error());
+    if (srvIStatsSetterNormalWorld == nullptr) {
         return EXIT_FAILURE;
     }
-    (*srvIStatsSetterNormalWorld)->setRootObject(statsSetterNormalWorld);
+    srvIStatsSetterNormalWorld->setRootObject(statsSetterNormalWorld);
 
     auto srvIStatsSetterSecureWorld = RpcServerTrusty::make(
             hset, RELAYER_PORT_ISTATS_SETTER_SECURE_WORLD,
             std::make_shared<const RpcServerTrusty::PortAcl>(portAcl_TA),
             maxMsgSize);
-    if (!srvIStatsSetterSecureWorld.ok()) {
-        TLOGE("Failed to create RpcServer (%d)\n",
-              srvIStatsSetterSecureWorld.error());
+    if (srvIStatsSetterSecureWorld == nullptr) {
         return EXIT_FAILURE;
     }
-    (*srvIStatsSetterSecureWorld)->setRootObject(statsSetterSecureWorld);
+    srvIStatsSetterSecureWorld->setRootObject(statsSetterSecureWorld);
 
     int rc = tipc_run_event_loop(hset);
 
