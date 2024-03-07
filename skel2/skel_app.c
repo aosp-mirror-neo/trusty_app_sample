@@ -14,10 +14,15 @@
  * limitations under the License.
  */
 
+#include <assert.h>
 #include <stdio.h>
+
+int in_rust_staticlib(int);
 
 int main(void) {
     printf("Hello world from skeleton app 2\n");
+
+    assert(in_rust_staticlib(5) == 25);
 
     return 0;
 }

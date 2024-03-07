@@ -24,5 +24,6 @@ MODULE_SRCS += \
 
 MODULE_LIBRARY_DEPS += \
 	trusty/user/base/lib/libc-trusty \
+	trusty/user/app/sample/skel2/rust \
 
 include make/trusted_app.mk
