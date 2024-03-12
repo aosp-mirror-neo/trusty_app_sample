@@ -13,6 +13,8 @@
 # limitations under the License.
 #
 
+include trusty/user/app/sample/stats-test/usertests-inc.mk
+
 TRUSTY_USER_TESTS += \
 	trusty/user/app/sample/app-mgmt-test/client\
 	trusty/user/app/sample/binder-test/client \
@@ -28,6 +30,7 @@ TRUSTY_USER_TESTS += \
 	trusty/user/app/sample/spi/swspi-srv \
 	trusty/user/app/sample/spi/swspi-test \
 	trusty/user/app/sample/skel_rust \
+	trusty/user/app/sample/skel2 \
 	trusty/user/app/sample/rust_no_std \
 
 TRUSTY_RUST_USER_TESTS += \

@@ -16,7 +16,7 @@
 
 #define TLOG_TAG "hwbcc-srv-impl"
 
-#include <dice/android/bcc.h>
+#include <dice/android.h>
 #include <lib/hwbcc/common/swbcc.h>
 #include <lib/hwbcc/srv/srv.h>
 #include <lib/tipc/tipc_srv.h>
@@ -55,9 +55,11 @@ int main(void) {
     memset(authority_hash, 0, DICE_HASH_SIZE);
 
     /* Initialize DICE information of the child node in non-secure world. */
-    BccConfigValues config_descriptor = {
-            /* TODO: add BCC_INPUT_RESETTABLE when the FRS is reliable */
-            .inputs = BCC_INPUT_COMPONENT_NAME | BCC_INPUT_COMPONENT_VERSION,
+    DiceAndroidConfigValues config_descriptor = {
+            /* TODO: add DICE_ANDROID_CONFIG_RESETTABLE when the FRS is reliable
+             */
+            .configs = DICE_ANDROID_CONFIG_COMPONENT_NAME |
+                       DICE_ANDROID_CONFIG_COMPONENT_VERSION,
             .component_name = "ABL",
             .component_version = 1,
     };
