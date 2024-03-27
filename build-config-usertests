@@ -28,5 +28,6 @@
     porttest("com.android.trusty.hwrng.test"),
     porttest("com.android.trusty.prebuilts.test"),
     porttest("com.android.trusty.stats.test"),
+    porttest("com.android.trusty.swaes.bench").type(BENCHMARK),
     porttest("com.android.trusty.swspi.test"),
 ]
