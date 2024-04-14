@@ -21,6 +21,7 @@ pub use android_hardware_security_see::aidl::android::hardware::security::see::h
 use android_hardware_security_see::binder;
 use core::array::TryFromSliceError;
 use coset::CoseError;
+use tipc::TipcError;
 
 /// Macro used to create a `HwCryptoError::HalError` by providing the AIDL `HalErrorCode` and a
 /// message: `hwcrypto_err!(UNSUPPORTED, "unsupported operation")`
@@ -50,6 +51,12 @@ pub enum HwCryptoError {
 impl From<kmr_wire::CborError> for HwCryptoError {
     fn from(e: kmr_wire::CborError) -> Self {
         HwCryptoError::CborError(e)
+    }
+}
+
+impl From<TipcError> for HwCryptoError {
+    fn from(e: TipcError) -> Self {
+        hwcrypto_err!(GENERIC_ERROR, "tipc communication error: {:?}", e)
     }
 }
 
