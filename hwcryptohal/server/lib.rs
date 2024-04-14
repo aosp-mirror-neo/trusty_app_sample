@@ -20,7 +20,11 @@
 
 pub mod hwcrypto_ipc_server;
 
+mod crypto_provider;
+mod ffi_bindings;
 mod hwcrypto_device_key;
+mod opaque_key;
+mod platform_functions;
 
 #[cfg(test)]
 mod tests {
