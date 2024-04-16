@@ -16,6 +16,7 @@
 include trusty/user/app/sample/stats-test/usertests-inc.mk
 
 TRUSTY_USER_TESTS += \
+	trusty/user/app/sample/hwcryptohal/server/app \
 	trusty/user/app/sample/app-mgmt-test/client\
 	trusty/user/app/sample/binder-test/client \
 	trusty/user/app/sample/binder-test/service \
@@ -34,6 +35,8 @@ TRUSTY_USER_TESTS += \
 	trusty/user/app/sample/rust_no_std \
 
 TRUSTY_RUST_USER_TESTS += \
+	trusty/user/app/sample/hwcryptohal/server \
+	trusty/user/app/sample/hwcryptokey-test \
 	trusty/user/app/sample/memref-test/rust \
 	trusty/user/app/sample/rust-hello-world \
 
