@@ -24,11 +24,12 @@ use android_hardware_security_see::aidl::android::hardware::security::see::hwcry
     KeyPolicy::KeyPolicy,
 };
 use android_hardware_security_see::binder;
+use binder::binder_impl::Binder;
 use core::fmt;
 use hwcryptohal_common::{err::HwCryptoError, hwcrypto_err};
 use kmr_common::{
-    crypto::{self, Aes, CurveType, Hmac, KeyMaterial, OpaqueOr, Rng},
-    FallibleAllocExt,
+    crypto::{self, Aes, CurveType, Hkdf, Hmac, KeyMaterial, OpaqueOr, Rng},
+    explicit, FallibleAllocExt,
 };
 use kmr_wire::keymint::EcCurve;
 use std::sync::OnceLock;
@@ -120,6 +121,20 @@ impl KeyHeader {
             keyManagementKey: self.management_key,
         })
     }
+
+    fn try_clone(&self) -> Result<Self, HwCryptoError> {
+        let mut key_permissions = Vec::new();
+        key_permissions.try_extend_from_slice(&self.key_permissions[..])?;
+        Ok(Self {
+            boot_unique_value: self.boot_unique_value.clone(),
+            expiration_time: self.expiration_time,
+            key_lifetime: self.key_lifetime,
+            key_permissions,
+            key_usage: self.key_usage,
+            key_type: self.key_type,
+            management_key: self.management_key,
+        })
+    }
 }
 
 /// `IOpaqueKey` implementation.
@@ -127,6 +142,25 @@ impl KeyHeader {
 pub struct OpaqueKey {
     pub(crate) key_header: KeyHeader,
     pub(crate) key_material: KeyMaterial,
+}
+
+impl TryFrom<&binder::Strong<dyn IOpaqueKey>> for OpaqueKey {
+    type Error = HwCryptoError;
+
+    fn try_from(value: &binder::Strong<dyn IOpaqueKey>) -> Result<OpaqueKey, Self::Error> {
+        let binder = value.as_binder();
+        let remote = binder.is_remote();
+        if remote {
+            return Err(hwcrypto_err!(UNSUPPORTED, "binder is not local"));
+        }
+        let binder_key: Binder<BnOpaqueKey> =
+            binder.try_into().expect("because binder is local this should not fail");
+        let opaque_key_material = (*binder_key).downcast_binder::<OpaqueKey>();
+        match opaque_key_material {
+            Some(key) => key.try_clone(),
+            None => Err(hwcrypto_err!(UNSUPPORTED, "couldn't cast back key")),
+        }
+    }
 }
 
 impl OpaqueKey {
@@ -142,12 +176,111 @@ impl OpaqueKey {
         Ok(opaque_keybinder)
     }
 
-    #[allow(unused)]
-    pub(crate) fn generate_opaque_key(
+    fn try_clone(&self) -> Result<Self, HwCryptoError> {
+        let key_header = self.key_header.try_clone()?;
+        let key_material = self.key_material.clone();
+        Ok(OpaqueKey { key_header, key_material })
+    }
+
+    fn new_opaque_key_from_raw_bytes(
         policy: &KeyPolicy,
+        key_material: Vec<u8>,
     ) -> binder::Result<binder::Strong<dyn IOpaqueKey>> {
-        let key_material = generate_key_material(&policy.keyType, None)?;
+        let key_material = generate_key_material(&policy.keyType, Some(key_material))?;
         OpaqueKey::new_binder(policy, key_material)
+    }
+
+    pub(crate) fn check_key_derivation_parameters(
+        &self,
+        policy: &KeyPolicy,
+    ) -> Result<(), HwCryptoError> {
+        // Check that we are trying to derive a supported key type
+        check_type_derived_key(policy.keyType)?;
+        // Check that the requested lifetime is compatible with the provided key lifetime
+        if !self.derivation_allowed_lifetime(policy.keyLifetime)? {
+            return Err(hwcrypto_err!(
+                BAD_PARAMETER,
+                "requested lifetime cannot be used {:?}",
+                &policy.keyLifetime
+            ));
+        }
+        // Check that the derivation key can be used to derive keys (KeyPermissions/KeyPolicies)
+        self.key_can_be_used_for_derivation()
+    }
+
+    pub(crate) fn derive_raw_key_material(
+        &self,
+        context: &[u8],
+        derived_key_size: usize,
+    ) -> Result<Vec<u8>, HwCryptoError> {
+        match &self.key_material {
+            KeyMaterial::Hmac(key) => {
+                let hkdf = crypto_provider::HmacImpl;
+                let explicit_key = explicit!(key).map_err(|_| {
+                    hwcrypto_err!(BAD_PARAMETER, "only explicit HMAC keys supported")
+                })?;
+                let raw_key = hkdf
+                    .hkdf(&[], &explicit_key.0, context, derived_key_size)
+                    .map_err(|e| hwcrypto_err!(GENERIC_ERROR, "couldn't derive key {:?}", e))?;
+                Ok(raw_key)
+            }
+            _ => Err(hwcrypto_err!(BAD_PARAMETER, "only HMAC keys supported")),
+        }
+    }
+
+    pub(crate) fn derive_key(
+        &self,
+        policy: &KeyPolicy,
+        context: &[u8],
+    ) -> binder::Result<binder::Strong<dyn IOpaqueKey>> {
+        self.check_key_derivation_parameters(policy)?;
+        let derived_key_size = get_key_size_in_bytes(&policy.keyType)?;
+        let raw_key_material = self.derive_raw_key_material(context, derived_key_size)?;
+        Self::new_opaque_key_from_raw_bytes(policy, raw_key_material)
+    }
+
+    fn derivation_allowed_lifetime(
+        &self,
+        derived_key_lifetime: KeyLifetime,
+    ) -> Result<bool, HwCryptoError> {
+        validate_lifetime(self.key_header.key_lifetime)?;
+        validate_lifetime(derived_key_lifetime)?;
+        match self.key_header.key_lifetime {
+            //ephemeral keys can be used to derive/wrap any other key
+            KeyLifetime::EPHEMERAL => Ok(true),
+            KeyLifetime::HARDWARE => {
+                // Hardware keys cannot be used to derive/wrap ephemeral keys
+                if derived_key_lifetime.0 == KeyLifetime::EPHEMERAL.0 {
+                    Ok(false)
+                } else {
+                    Ok(true)
+                }
+            }
+            KeyLifetime::PORTABLE => {
+                // portable keys can only derive/wrap other portable keys
+                if derived_key_lifetime.0 == KeyLifetime::PORTABLE.0 {
+                    Ok(true)
+                } else {
+                    Ok(false)
+                }
+            }
+            _ => Err(hwcrypto_err!(
+                UNSUPPORTED,
+                "unsupported Key lifetime {:?}",
+                self.key_header.key_lifetime
+            )),
+        }
+    }
+
+    fn key_can_be_used_for_derivation(&self) -> Result<(), HwCryptoError> {
+        match self.key_material {
+            KeyMaterial::Hmac(_) => Ok(()),
+            _ => Err(hwcrypto_err!(UNSUPPORTED, "Only HMAC keys can be used for key derivation")),
+        }?;
+        if self.key_header.key_usage != KeyUse::DERIVE {
+            return Err(hwcrypto_err!(BAD_PARAMETER, "key was not exclusively a derive key"));
+        }
+        Ok(())
     }
 }
 
@@ -319,6 +452,32 @@ pub(crate) fn get_key_size_in_bytes(key_type: &KeyType) -> Result<usize, HwCrypt
         KeyType::HMAC_SHA256 => Ok(32),
         KeyType::HMAC_SHA512 => Ok(64),
         _ => unimplemented!("Only AES and HMAC has been implemented"),
+    }
+}
+
+fn validate_lifetime(lifetime: KeyLifetime) -> Result<(), HwCryptoError> {
+    match lifetime {
+        KeyLifetime::EPHEMERAL | KeyLifetime::HARDWARE | KeyLifetime::PORTABLE => Ok(()),
+        // AIDL structure have more values added than the ones defined on the AIDL file
+        _ => Err(hwcrypto_err!(UNSUPPORTED, "unsupported Key lifetime {:?}", lifetime)),
+    }
+}
+
+fn check_type_derived_key(key_type: KeyType) -> Result<(), HwCryptoError> {
+    match key_type {
+        KeyType::AES_128_CBC_NO_PADDING
+        | KeyType::AES_128_CBC_PKCS7_PADDING
+        | KeyType::AES_128_CTR
+        | KeyType::AES_128_GCM
+        | KeyType::AES_128_CMAC
+        | KeyType::AES_256_CBC_NO_PADDING
+        | KeyType::AES_256_CBC_PKCS7_PADDING
+        | KeyType::AES_256_CTR
+        | KeyType::AES_256_GCM
+        | KeyType::AES_256_CMAC
+        | KeyType::HMAC_SHA256
+        | KeyType::HMAC_SHA512 => Ok(()),
+        _ => Err(hwcrypto_err!(BAD_PARAMETER, "Only HMAC and AES keys are supported")),
     }
 }
 

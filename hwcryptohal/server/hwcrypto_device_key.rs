@@ -21,13 +21,14 @@ use android_hardware_security_see::aidl::android::hardware::security::see::hwcry
     types::{KeyLifetime::KeyLifetime, KeyType::KeyType, KeyUse::KeyUse},
     IHwCryptoKey::{
         BnHwCryptoKey, DerivedKey::DerivedKey, DerivedKeyParameters::DerivedKeyParameters,
-        DeviceKeyId::DeviceKeyId, DiceBoundDerivationKey::DiceBoundDerivationKey,
-        DiceBoundKeyResult::DiceBoundKeyResult,
+        DerivedKeyPolicy::DerivedKeyPolicy, DeviceKeyId::DeviceKeyId,
+        DiceBoundDerivationKey::DiceBoundDerivationKey, DiceBoundKeyResult::DiceBoundKeyResult,
         DiceCurrentBoundKeyResult::DiceCurrentBoundKeyResult, IHwCryptoKey,
     },
     KeyPolicy::KeyPolicy,
 };
 use android_hardware_security_see::binder;
+use binder::StatusCode;
 use ciborium::{cbor, Value};
 use coset::{AsCborValue, CborSerializable, CoseError};
 use hwcryptohal_common::{err::HwCryptoError, hwcrypto_err};
@@ -35,11 +36,25 @@ use hwkey::{Hwkey, KdfVersion};
 use tipc::Uuid;
 
 use crate::cose_enum_gen;
-use crate::opaque_key;
+use crate::opaque_key::{self, OpaqueKey};
 use crate::service_encryption_key::{self, EncryptionHeader};
 
 const DEVICE_KEY_CTX: &[u8] = b"device_key_derivation_contextKEK";
 const DICE_BOUND_POLICY_CTX: &[u8] = b"dice_bound";
+
+const OPAQUE_KEY_CTX: &[u8] = b"opaque";
+const CLEAR_KEY_CTX: &[u8] = b"cleark";
+const OPAQUE_CLEAR_CTX_SIZE: usize = 6;
+
+// Checking that both context have the same size and it is equal to `OPAQUE_CLEAR_CTX_SIZE`
+const _: () = assert!(
+    (OPAQUE_KEY_CTX.len() == OPAQUE_CLEAR_CTX_SIZE),
+    "opaque context size must match OPAQUE_CLEAR_CTX_SIZE"
+);
+const _: () = assert!(
+    (CLEAR_KEY_CTX.len() == OPAQUE_CLEAR_CTX_SIZE),
+    "clear context size must match OPAQUE_CLEAR_CTX_SIZE"
+);
 
 // enum used for serializing the `VersionContext`
 cose_enum_gen! {
@@ -287,17 +302,77 @@ impl IHwCryptoKey for HwCryptoKey {
         Ok(self.derive_dice_policy_bound_key(derivation_key, dice_policy_for_key_version)?)
     }
 
-    fn deriveKey(&self, _parameters: &DerivedKeyParameters) -> binder::Result<DerivedKey> {
-        Err(binder::Status::new_exception_str(
-            binder::ExceptionCode::UNSUPPORTED_OPERATION,
-            Some("operation has not been implemented yet"),
-        ))
+    fn deriveKey(&self, parameters: &DerivedKeyParameters) -> binder::Result<DerivedKey> {
+        if let DerivedKeyPolicy::ClearKey(policy) = &parameters.keyPolicy {
+            if policy.keySizeBytes <= 0 {
+                return Err(binder::Status::new_exception_str(
+                    binder::ExceptionCode::UNSUPPORTED_OPERATION,
+                    Some("we do not support keys of length less or equal to 0"),
+                ));
+            }
+        }
+
+        let derivation_key: OpaqueKey = parameters
+            .derivationKey
+            .as_ref()
+            .ok_or(binder::Status::new_exception_str(
+                binder::ExceptionCode::UNSUPPORTED_OPERATION,
+                Some("didn't receive a derivation key"),
+            ))?
+            .try_into()?;
+
+        let mut concat_context = Vec::<u8>::new();
+        concat_context.try_reserve(parameters.context.len()).map_err(|_| StatusCode::NO_MEMORY)?;
+        concat_context.extend_from_slice(&parameters.context);
+        concat_context.try_reserve(OPAQUE_CLEAR_CTX_SIZE).map_err(|_| StatusCode::NO_MEMORY)?;
+
+        match &parameters.keyPolicy {
+            DerivedKeyPolicy::ClearKey(clear_policy) => {
+                concat_context.extend_from_slice(CLEAR_KEY_CTX);
+                // Adding key size to the context as well for a similar reason as to add the key
+                // policy to the context.
+                let key_size = clear_policy.keySizeBytes.try_into().map_err(|_| {
+                    binder::Status::new_exception_str(
+                        binder::ExceptionCode::UNSUPPORTED_OPERATION,
+                        Some("shouldn't happen, we checked that keySize was positive"),
+                    )
+                })?;
+                // A u32 fits on a usize on the architectures we use, so conversion is correct
+                if key_size > (u32::MAX as usize) {
+                    return Err(binder::Status::new_exception_str(
+                        binder::ExceptionCode::UNSUPPORTED_OPERATION,
+                        Some("requested key size was too big"),
+                    ));
+                }
+                let key_size_as_bytes = (key_size as u32).to_le_bytes();
+                concat_context
+                    .try_reserve(key_size_as_bytes.len())
+                    .map_err(|_| StatusCode::NO_MEMORY)?;
+                concat_context.extend_from_slice(&key_size_as_bytes[..]);
+
+                let derived_key =
+                    derivation_key.derive_raw_key_material(concat_context.as_slice(), key_size)?;
+                Ok(DerivedKey::ExplicitKey(derived_key))
+            }
+            DerivedKeyPolicy::OpaqueKey(key_policy) => {
+                concat_context.extend_from_slice(OPAQUE_KEY_CTX);
+                // TODO: Add keyPolicy to the context to mitigate attacks trying to use the same
+                //       generated key material under different algorithms.
+                let _derived_key =
+                    derivation_key.derive_key(key_policy, concat_context.as_slice())?;
+                Err(binder::Status::new_exception_str(
+                    binder::ExceptionCode::UNSUPPORTED_OPERATION,
+                    Some("cannot return opaque keys until we add its policy to context"),
+                ))
+            }
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use android_hardware_security_see::aidl::android::hardware::security::see::hwcrypto::IHwCryptoKey::ClearKeyPolicy::ClearKeyPolicy;
     use test::{assert_ok, expect};
 
     #[test]
@@ -333,5 +408,59 @@ mod tests {
             key_and_policy;
         expect!(key.is_some(), "should have received a key");
         expect!(current_policy, "policy should have been current");
+    }
+
+    #[test]
+    fn derived_clear_key() {
+        let hw_device_key = HwCryptoKey::new_binder(
+            Uuid::new_from_string("f41a7796-975a-4279-8cc4-b73f8820430d").unwrap(),
+        );
+
+        let derivation_key = DiceBoundDerivationKey::KeyId(DeviceKeyId::DEVICE_BOUND_KEY);
+        let key_and_policy =
+            assert_ok!(hw_device_key.deriveCurrentDicePolicyBoundKey(&derivation_key));
+        let DiceCurrentBoundKeyResult { diceBoundKey: key, dicePolicyForKeyVersion: policy } =
+            key_and_policy;
+        expect!(key.is_some(), "should have received a key");
+        expect!(policy.len() > 0, "should have received a DICE policy");
+
+        let clear_key_policy = DerivedKeyPolicy::ClearKey(ClearKeyPolicy { keySizeBytes: 0 });
+        let mut params = DerivedKeyParameters {
+            derivationKey: key,
+            keyPolicy: clear_key_policy,
+            context: "context".as_bytes().to_vec(),
+        };
+        let key = hw_device_key.deriveKey(&params);
+        expect!(key.is_err(), "shouldn't be able to create a key of length 0");
+
+        let clear_key_policy = DerivedKeyPolicy::ClearKey(ClearKeyPolicy { keySizeBytes: 32 });
+        params.keyPolicy = clear_key_policy;
+        let derived_key = assert_ok!(hw_device_key.deriveKey(&params));
+        let key1 = match derived_key {
+            DerivedKey::ExplicitKey(key) => key,
+            DerivedKey::Opaque(_) => panic!("wrong type of key received"),
+        };
+
+        let key_and_policy =
+            assert_ok!(hw_device_key.deriveDicePolicyBoundKey(&derivation_key, &policy));
+        let DiceBoundKeyResult { diceBoundKey: key, dicePolicyWasCurrent: current_policy } =
+            key_and_policy;
+        expect!(key.is_some(), "should have received a key");
+        expect!(current_policy, "policy should have been current");
+        params.derivationKey = key;
+        let derived_key = assert_ok!(hw_device_key.deriveKey(&params));
+        let key2 = match derived_key {
+            DerivedKey::ExplicitKey(key) => key,
+            DerivedKey::Opaque(_) => panic!("wrong type of key received"),
+        };
+        expect!(openssl::memcmp::eq(&key1, &key2), "keys should have matched");
+
+        params.context = "cont3xt".as_bytes().to_vec();
+        let derived_key = assert_ok!(hw_device_key.deriveKey(&params));
+        let key3 = match derived_key {
+            DerivedKey::ExplicitKey(key) => key,
+            DerivedKey::Opaque(_) => panic!("wrong type of key received"),
+        };
+        expect!(!openssl::memcmp::eq(&key1, &key3), "keys shouldn't have matched");
     }
 }
