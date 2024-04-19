@@ -13,8 +13,10 @@
 # limitations under the License.
 #
 
+ifeq (true,$(call TOBOOL,$(STORAGE_ENABLE_ERROR_REPORTING)))
 TRUSTY_USER_TESTS += \
 	trusty/user/app/sample/stats-test \
 	trusty/user/app/sample/stats-test/consumer \
 	trusty/user/app/sample/stats-test/relayer \
 
+endif
