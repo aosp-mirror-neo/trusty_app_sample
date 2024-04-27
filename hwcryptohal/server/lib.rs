@@ -16,7 +16,9 @@
 
 //! Library implementing the different `IHwCrypto` AIDL interfaces.
 
-#![feature(c_str_literals)]
+#![feature(cfg_version)]
+// C string literals were stabilized in Rust 1.77
+#![cfg_attr(not(version("1.77")), feature(c_str_literals))]
 
 pub mod hwcrypto_ipc_server;
 
