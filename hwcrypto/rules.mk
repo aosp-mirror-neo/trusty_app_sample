@@ -75,6 +75,7 @@ MODULE_COMPILEFLAGS += \
 endif
 
 ifeq (true,$(call TOBOOL,$(WITH_FAKE_KEYBOX)))
+MODULE_DEFINES += WITH_FAKE_KEYBOX
 include $(LOCAL_DIR)/keybox/rules.mk
 endif
 
