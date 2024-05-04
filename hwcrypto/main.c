@@ -77,11 +77,13 @@ int main(void) {
     }
     hwkey_init_srv_provider();
 
+#if defined(WITH_FAKE_KEYBOX)
     rc = keybox_start_service();
     if (rc != NO_ERROR) {
         TLOGE("Failed (%d) to initialize Keybox service\n", rc);
         goto out;
     }
+#endif
 
     TLOGD("enter main event loop\n");
 
