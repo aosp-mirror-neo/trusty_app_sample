@@ -37,6 +37,7 @@ MODULE_LIBRARY_DEPS += \
 	trusty/user/base/lib/stats \
 	trusty/user/base/lib/tipc \
 	trusty/user/base/lib/unittest \
+	trusty/user/base/interface/metrics/ \
 	trusty/user/base/interface/stats/nw \
 	trusty/user/base/interface/stats/tz \
 	trusty/user/base/interface/stats_setter \
