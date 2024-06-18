@@ -26,6 +26,7 @@ mod crypto_provider;
 mod ffi_bindings;
 mod helpers;
 mod hwcrypto_device_key;
+mod hwcrypto_operations;
 mod opaque_key;
 mod platform_functions;
 mod service_encryption_key;

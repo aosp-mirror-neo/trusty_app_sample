@@ -25,6 +25,7 @@ use android_hardware_security_see::aidl::android::hardware::security::see::hwcry
         DiceBoundDerivationKey::DiceBoundDerivationKey, DiceBoundKeyResult::DiceBoundKeyResult,
         DiceCurrentBoundKeyResult::DiceCurrentBoundKeyResult, IHwCryptoKey,
     },
+    IHwCryptoOperations::IHwCryptoOperations,
     KeyPolicy::KeyPolicy,
 };
 use android_hardware_security_see::binder;
@@ -34,6 +35,8 @@ use coset::{AsCborValue, CborSerializable, CoseError};
 use hwcryptohal_common::{err::HwCryptoError, hwcrypto_err};
 use hwkey::{Hwkey, KdfVersion};
 use tipc::Uuid;
+
+use crate::hwcrypto_operations::HwCryptoOperations;
 
 use crate::cose_enum_gen;
 use crate::opaque_key::{self, OpaqueKey};
@@ -366,6 +369,10 @@ impl IHwCryptoKey for HwCryptoKey {
                 ))
             }
         }
+    }
+
+    fn getHwCryptoOperations(&self) -> binder::Result<binder::Strong<dyn IHwCryptoOperations>> {
+        Ok(HwCryptoOperations::new_binder())
     }
 }
 
