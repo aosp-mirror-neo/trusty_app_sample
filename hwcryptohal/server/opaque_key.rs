@@ -176,6 +176,14 @@ impl OpaqueKey {
         Ok(opaque_keybinder)
     }
 
+    #[allow(dead_code)]
+    pub(crate) fn generate_opaque_key(
+        policy: &KeyPolicy,
+    ) -> binder::Result<binder::Strong<dyn IOpaqueKey>> {
+        let key_material = generate_key_material(&policy.keyType, None)?;
+        OpaqueKey::new_binder(policy, key_material)
+    }
+
     fn try_clone(&self) -> Result<Self, HwCryptoError> {
         let key_header = self.key_header.try_clone()?;
         let key_material = self.key_material.clone();
