@@ -25,7 +25,14 @@ use android_hardware_security_see::aidl::android::hardware::security::see::hwcry
         MemoryBuffer::MemoryBuffer as MemoryBufferAidl, MemoryBufferParameter,
     },
 };
+use core::ffi::c_void;
 use hwcryptohal_common::{err::HwCryptoError, hwcrypto_err};
+use std::{os::fd::AsRawFd, ptr::NonNull};
+use vm_memory::volatile_memory::VolatileSlice;
+
+const OUTPUT_MEMORY_BUFFER_FLAGS: u32 =
+    trusty_sys::MMAP_FLAG_PROT_READ | trusty_sys::MMAP_FLAG_PROT_WRITE;
+const INPUT_MEMORY_BUFFER_FLAGS: u32 = trusty_sys::MMAP_FLAG_PROT_READ;
 
 /// `CmdProcessorState` is a state machine with 3 states:
 ///
@@ -95,6 +102,13 @@ struct OutputData {
     remaining_size: Option<usize>,
 }
 
+fn get_mmap_prot_flags(memory_buffer: &MemoryBufferAidl) -> u32 {
+    match memory_buffer {
+        MemoryBufferAidl::Input(_) => INPUT_MEMORY_BUFFER_FLAGS,
+        MemoryBufferAidl::Output(_) => OUTPUT_MEMORY_BUFFER_FLAGS,
+    }
+}
+
 // Type added to be able to use AIDL `MemoryBufferReference` type more conveniently
 struct MemoryBufferSlice {
     start_offset: i32,
@@ -143,16 +157,68 @@ impl MemoryBufferReferenceWithType {
 
 // TODO: This type is still a WIP.
 struct MemoryBuffer {
+    #[allow(dead_code)]
+    mem_buffer: VolatileSlice<'static>,
+    buffer_ptr: NonNull<u8>,
     total_size: usize,
 }
 
 impl MemoryBuffer {
     fn new(memory_buffer_parameters: &MemoryBufferParameter) -> Result<Self, HwCryptoError> {
-        // TODO: size should be extracted from ParcelFileDescriptor but that is not possible yet
         if memory_buffer_parameters.sizeBytes <= 0 {
             return Err(hwcrypto_err!(BAD_PARAMETER, "Buffer size was not greater than 0"));
         }
-        Ok(Self { total_size: memory_buffer_parameters.sizeBytes as usize })
+        // memory_buffer_parameters.size is positive and because it is an i32, conversion is correct
+        let buffer_size = memory_buffer_parameters.sizeBytes as u32;
+        let protection_flags = get_mmap_prot_flags(&memory_buffer_parameters.bufferHandle);
+        let buffer_handle = match &memory_buffer_parameters.bufferHandle {
+            MemoryBufferAidl::Input(handle) | MemoryBufferAidl::Output(handle) => handle,
+        };
+
+        let buffer_handle = buffer_handle
+            .as_ref()
+            .ok_or_else(|| hwcrypto_err!(BAD_PARAMETER, "received a null buffer handle"))?;
+        // SAFETY: mmap is left to choose the address for the allocation. It will check that the
+        //         protection flags, size and fd are correct and return a negative value if
+        //         not.
+        let buffer_ptr = unsafe {
+            trusty_sys::mmap(
+                std::ptr::null_mut(),
+                buffer_size,
+                protection_flags,
+                buffer_handle.as_ref().as_raw_fd(),
+            )
+        };
+        if trusty_sys::Error::is_ptr_err(buffer_ptr as *const c_void) {
+            return Err(hwcrypto_err!(
+                BAD_PARAMETER,
+                "mapping buffer handle failed: {}",
+                buffer_ptr
+            ));
+        }
+        // cast is correct because buffer_ptr is positive and a pointer
+        let buffer_ptr = NonNull::new(buffer_ptr as *mut u8)
+            .ok_or(hwcrypto_err!(BAD_PARAMETER, "buffer_ptr was NULL"))?;
+        // cast is correct because buffer_size is an u32
+        let buffer_size = buffer_size as usize;
+
+        // SAFETY: Memory at address `buffer_ptr` has length `buffer_size` because if not mmap
+        //         operation would have failed. All accesses to this memory on this service are
+        //         through the VolatileSlice methods, so accesses are volatile accesses. Memory
+        //         is only unmapped on drop, so it will available for the lifetime of the
+        //         `VolatileSlice`.
+        let mem_buffer = unsafe { VolatileSlice::new(buffer_ptr.as_ptr(), buffer_size) };
+        Ok(Self { mem_buffer, buffer_ptr, total_size: buffer_size })
+    }
+}
+
+impl Drop for MemoryBuffer {
+    fn drop(&mut self) {
+        // SAFETY: `buffer_ptr` and `total_size` were set up and remain unchanged for the lifetime
+        //         of the object. `buffer_ptr` is still mapped at this point
+        unsafe {
+            trusty_sys::munmap(self.buffer_ptr.as_ptr().cast::<c_void>(), self.total_size as u32)
+        };
     }
 }
 
@@ -385,7 +451,238 @@ mod tests {
         OperationParameters::OperationParameters,
         PatternParameters::PatternParameters,
     };
-    use test::expect;
+    use binder::ParcelFileDescriptor;
+    use core::ffi::c_void;
+    use std::alloc::{alloc_zeroed, dealloc, Layout};
+    use std::os::fd::{FromRawFd, OwnedFd};
+    use test::{expect, expect_eq};
+    use vm_memory::Bytes;
+
+    /// Structure only intended to use on unit tests. It will allocate a single memory page and
+    /// create a memref to it.
+    struct TestPageAllocator {
+        allocated_buffer: *mut u8,
+        layout: Layout,
+        raw_trusty_fd: i64,
+        parcel_file_descriptor_created: bool,
+    }
+
+    impl TestPageAllocator {
+        fn new() -> Result<Self, HwCryptoError> {
+            let page_size = Self::get_allocation_size();
+            if page_size == 0 {
+                return Err(hwcrypto_err!(ALLOCATION_ERROR, "received zero as the page size"));
+            }
+            let layout = Layout::from_size_align(page_size, page_size).map_err(|e| {
+                hwcrypto_err!(
+                    GENERIC_ERROR,
+                    "layout creation error, should not have happened: {:?}",
+                    e
+                )
+            })?;
+            // SAFETY: Layout is non-zero
+            let allocated_buffer = unsafe { alloc_zeroed(layout) };
+            // Always mapping things as output to change the buffer values for tests
+            let prot_flags = OUTPUT_MEMORY_BUFFER_FLAGS;
+            // SAFETY: address and size are correct because they came from the allocation.
+            let raw_trusty_fd = unsafe {
+                trusty_sys::memref_create(
+                    allocated_buffer as *mut c_void,
+                    page_size as u32,
+                    prot_flags,
+                )
+            };
+            if raw_trusty_fd < 0 {
+                return Err(hwcrypto_err!(ALLOCATION_ERROR, "memref creation failed"));
+            }
+            let parcel_file_descriptor_created = false;
+            Ok(Self {
+                allocated_buffer,
+                layout,
+                raw_trusty_fd: raw_trusty_fd.into(),
+                parcel_file_descriptor_created,
+            })
+        }
+
+        fn get_parcel_file_descriptor(&mut self) -> Result<ParcelFileDescriptor, HwCryptoError> {
+            if self.parcel_file_descriptor_created {
+                return Err(hwcrypto_err!(
+                    GENERIC_ERROR,
+                    "only a single parcel file descriptor can be created"
+                ));
+            }
+            // fd is valid if the object has been created and we can take ownership of it.
+            self.parcel_file_descriptor_created = true;
+            let fd = unsafe { OwnedFd::from_raw_fd(self.raw_trusty_fd as i32) };
+            Ok(ParcelFileDescriptor::new(fd))
+        }
+
+        fn get_allocation_size() -> usize {
+            // SAFETY: FFI call with all safe arguments.
+            let page_size = unsafe { libc::getauxval(libc::AT_PAGESZ) };
+            page_size as usize
+        }
+
+        fn copy_values(&mut self, start: usize, values: &[u8]) -> Result<(), HwCryptoError> {
+            if self.parcel_file_descriptor_created {
+                // There is already another reference to this memory area, don't allow to change it
+                // anymore through this method
+                return Err(hwcrypto_err!(GENERIC_ERROR, "copy_values is meant for initialization before creating any other references to this memory area"));
+            }
+            if start + values.len() > Self::get_allocation_size() {
+                return Err(hwcrypto_err!(BAD_PARAMETER, "input won't fit in buffer"));
+            }
+            // SAFETY: - value is valid for all the range that is read
+            //         - allocated_buffer[start, start + values.len()] is a valid area to write
+            //         - allocated_buffer and values are properly aligned because they are `u8`
+            //         - both areas do not overlap because allocated_buffer is a newly allocated
+            //           buffer and we do not have methods to get references to this area until
+            //           after this method is no longer valid.
+            unsafe {
+                self.allocated_buffer
+                    .wrapping_add(start)
+                    .copy_from_nonoverlapping(values.as_ptr(), values.len());
+            }
+            Ok(())
+        }
+    }
+
+    impl Drop for TestPageAllocator {
+        fn drop(&mut self) {
+            // SAFETY: `allocated_buffer` is valid and have been allocated by the same allocator.
+            //         layout was stored at allocation time, so it matches.
+            unsafe { dealloc(self.allocated_buffer, self.layout) };
+        }
+    }
+
+    fn read_slice(
+        memory_buffer: &MemoryBuffer,
+        buf: &mut [u8],
+        start: usize,
+    ) -> Result<(), HwCryptoError> {
+        memory_buffer.mem_buffer.read_slice(buf, start).map_err(HwCryptoError::from)
+    }
+
+    fn write_slice(
+        memory_buffer: &MemoryBuffer,
+        buf: &[u8],
+        start: usize,
+    ) -> Result<(), HwCryptoError> {
+        Ok(memory_buffer.mem_buffer.write_slice(buf, start)?)
+    }
+
+    #[test]
+    fn create_memory_buffer() {
+        let mut output_page = TestPageAllocator::new().expect("couldn't allocate test page");
+        output_page.copy_values(0, &[1, 2, 3, 4, 5, 6, 7, 8, 9]).unwrap();
+
+        let total_buffer_size = TestPageAllocator::get_allocation_size();
+        let mem_buffer_parameters = MemoryBufferParameter {
+            bufferHandle: MemoryBufferAidl::Output(Some(
+                output_page.get_parcel_file_descriptor().expect("couldn't create fd"),
+            )),
+            sizeBytes: total_buffer_size as i32,
+        };
+        let memory_buffer =
+            MemoryBuffer::new(&mem_buffer_parameters).expect("Couldn't create a memory buffer");
+
+        let mut slice = vec![0; 5];
+
+        read_slice(&memory_buffer, &mut slice[0..2], 1).expect("couldn't get slice");
+        expect_eq!(&slice[0..2], &[2, 3], "wrong value retrieved through slice");
+
+        read_slice(&memory_buffer, &mut slice[0..1], 8).expect("couldn't get slice");
+        expect_eq!(&slice[0..1], &[9], "wrong value retrieved through slice");
+
+        let result = read_slice(&memory_buffer, &mut slice[0..2], total_buffer_size - 1);
+        expect!(result.is_err(), "Shouldn't be able to get slice with end out of range");
+
+        let result = read_slice(&memory_buffer, &mut slice[0..1], total_buffer_size);
+        expect!(result.is_err(), "Shouldn't be able to get slice with start out of range");
+
+        read_slice(&memory_buffer, &mut slice[0..1], 0).expect("couldn't get slice");
+        expect_eq!(&slice[0..1], &[1], "wrong value retrieved through slice");
+
+        read_slice(&memory_buffer, &mut slice[0..3], 4).expect("couldn't get slice");
+        expect_eq!(&slice[0..3], &[5, 6, 7], "wrong value retrieved through slice");
+
+        write_slice(&memory_buffer, &[55], 5).expect("couldn't write slice");
+        read_slice(&memory_buffer, &mut slice[0..3], 4).expect("couldn't get slice");
+        expect_eq!(&slice[0..3], &[5, 55, 7], "wrong value retrieved through slice");
+
+        read_slice(&memory_buffer, &mut slice[0..5], 3).expect("couldn't get slice");
+        expect_eq!(&slice[0..5], &[4, 5, 55, 7, 8], "wrong value retrieved through slice");
+    }
+
+    #[test]
+    fn create_output_data_references() {
+        let mut output_page = TestPageAllocator::new().expect("couldn't allocate test page");
+        let total_buffer_size = TestPageAllocator::get_allocation_size();
+        let mem_buffer_parameters = MemoryBufferParameter {
+            bufferHandle: MemoryBufferAidl::Output(Some(
+                output_page.get_parcel_file_descriptor().expect("couldn't create fd"),
+            )),
+            sizeBytes: total_buffer_size as i32,
+        };
+
+        let mut cmd_list = Vec::<CryptoOperation>::new();
+        let mut cmd_processor = CmdProcessorContext::new();
+
+        cmd_list.push(CryptoOperation::SetMemoryBuffer(mem_buffer_parameters));
+        let mem_reference = MemoryBufferReference { startOffset: 0, sizeBytes: 3 };
+        cmd_list
+            .push(CryptoOperation::DataOutput(OperationData::MemoryBufferReference(mem_reference)));
+
+        let process_result = cmd_processor.process_step(0, &mut cmd_list);
+        expect!(process_result.is_ok(), "Couldn't process SetMemoryBuffer command");
+
+        let process_result = cmd_processor.process_step(1, &mut cmd_list);
+        expect!(process_result.is_ok(), "Couldn't process valid memory reference");
+
+        let mem_reference =
+            MemoryBufferReference { startOffset: total_buffer_size as i32, sizeBytes: 1 };
+        cmd_list
+            .push(CryptoOperation::DataOutput(OperationData::MemoryBufferReference(mem_reference)));
+
+        let process_result = cmd_processor.process_step(2, &mut cmd_list);
+        expect!(
+            process_result.is_err(),
+            "Shouldn't be able to process reference outside of buffer"
+        );
+
+        let mem_reference =
+            MemoryBufferReference { startOffset: total_buffer_size as i32, sizeBytes: 0 };
+        cmd_list
+            .push(CryptoOperation::DataOutput(OperationData::MemoryBufferReference(mem_reference)));
+        let process_result = cmd_processor.process_step(3, &mut cmd_list);
+        expect!(
+            process_result.is_err(),
+            "Shouldn't be able to process reference outside of buffer"
+        );
+
+        let mem_reference = MemoryBufferReference { startOffset: 3, sizeBytes: 0 };
+        cmd_list
+            .push(CryptoOperation::DataOutput(OperationData::MemoryBufferReference(mem_reference)));
+        let process_result = cmd_processor.process_step(4, &mut cmd_list);
+        expect!(process_result.is_err(), "Shouldn't be able to process 0 size references");
+
+        let mem_reference =
+            MemoryBufferReference { startOffset: total_buffer_size as i32 - 1, sizeBytes: 1 };
+        cmd_list
+            .push(CryptoOperation::DataOutput(OperationData::MemoryBufferReference(mem_reference)));
+        let process_result = cmd_processor.process_step(5, &mut cmd_list);
+        expect!(process_result.is_ok(), "Couldn't process valid memory reference");
+
+        let mem_reference =
+            MemoryBufferReference { startOffset: total_buffer_size as i32 - 1, sizeBytes: 2 };
+        cmd_list
+            .push(CryptoOperation::DataOutput(OperationData::MemoryBufferReference(mem_reference)));
+        let process_result = cmd_processor.process_step(6, &mut cmd_list);
+        expect!(
+            process_result.is_err(),
+            "Shouldn't be able to process reference that falls out of range"
+        );
+    }
 
     #[test]
     fn parse_empty_cmd_list() {
@@ -434,6 +731,7 @@ mod tests {
         cmd_list.push(CryptoOperation::SetPattern(pattern_params));
         cmd_list.push(CryptoOperation::Finish(None));
         cmd_list.push(CryptoOperation::DataOutput(OperationData::DataBuffer(Vec::new())));
+
         let process_result = cmd_processor.process_step(0, &mut cmd_list);
         expect!(process_result.is_err(), "Shouldn't be able to call DataInput on initial state");
         let process_result = cmd_processor.process_step(1, &mut cmd_list);
