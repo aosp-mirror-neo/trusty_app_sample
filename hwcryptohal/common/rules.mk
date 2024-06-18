@@ -28,5 +28,6 @@ MODULE_LIBRARY_DEPS += \
 	trusty/user/base/lib/tipc/rust \
 	trusty/user/base/lib/trusty-sys \
 	$(call FIND_CRATE,log) \
+	$(call FIND_CRATE,vm-memory) \
 
 include make/library.mk

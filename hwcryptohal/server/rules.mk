@@ -39,6 +39,7 @@ MODULE_LIBRARY_DEPS += \
 	$(call FIND_CRATE,log) \
 	trusty/user/base/lib/trusty-log \
 	trusty/user/base/lib/trusty-std \
+	$(call FIND_CRATE,vm-memory) \
 
 MODULE_BINDGEN_ALLOW_FUNCTIONS := \
 	trusty_rng_.* \
