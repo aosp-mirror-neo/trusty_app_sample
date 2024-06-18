@@ -28,7 +28,7 @@ use android_hardware_security_see::aidl::android::hardware::security::see::hwcry
 use core::ffi::c_void;
 use hwcryptohal_common::{err::HwCryptoError, hwcrypto_err};
 use std::{os::fd::AsRawFd, ptr::NonNull};
-use vm_memory::volatile_memory::VolatileSlice;
+use vm_memory::{volatile_memory::VolatileSlice, Bytes, VolatileMemory};
 
 const OUTPUT_MEMORY_BUFFER_FLAGS: u32 =
     trusty_sys::MMAP_FLAG_PROT_READ | trusty_sys::MMAP_FLAG_PROT_WRITE;
@@ -95,11 +95,63 @@ enum CmdProcessorState {
     Destroyed,
 }
 
-// Structure to keep track how much space we still have on the current output buffer.
-struct OutputData {
-    #[allow(unused)]
-    step: usize,
-    remaining_size: Option<usize>,
+// `DataToProcess`is used to abstract away if the cryptographic operations are working on memory
+// buffers or vectors.
+pub(crate) enum DataToProcess<'a> {
+    VolatileSlice(VolatileSlice<'a>),
+    Slice(&'a mut [u8]),
+}
+
+impl<'a> DataToProcess<'a> {
+    pub(crate) fn len(&self) -> usize {
+        match self {
+            Self::VolatileSlice(vs) => vs.len(),
+            Self::Slice(s) => s.len(),
+        }
+    }
+
+    pub(crate) fn copy_from_slice(
+        &mut self,
+        slice: &DataToProcess<'a>,
+    ) -> Result<(), HwCryptoError> {
+        if self.len() < slice.len() {
+            return Err(hwcrypto_err!(
+                BAD_PARAMETER,
+                "slice size: {} is less than the slice provided {}",
+                self.len(),
+                slice.len()
+            ));
+        }
+        match (slice, self) {
+            (Self::Slice(from), Self::VolatileSlice(to)) => to.write_slice(from, 0)?,
+            (Self::VolatileSlice(from), Self::VolatileSlice(to)) => {
+                from.copy_to_volatile_slice(to.get_slice(0, to.len())?)
+            }
+            (Self::Slice(from), Self::Slice(to)) => to[0..from.len()].copy_from_slice(from),
+            (Self::VolatileSlice(from), Self::Slice(to)) => from.read_slice(to, 0)?,
+        }
+        Ok(())
+    }
+
+    /// Grows the vector to the required size and return a `DataToProcess` to the newly allocated
+    /// portion
+    pub(crate) fn allocate_buffer_end_vector(
+        vector: &'a mut Vec<u8>,
+        buffer_size: usize,
+    ) -> Result<DataToProcess<'a>, HwCryptoError> {
+        let original_len = vector.len();
+        vector.try_reserve(buffer_size)?;
+        // Addition should be safe because try_reserve didn't fail
+        let new_len = original_len + buffer_size;
+        vector.resize_with(new_len, Default::default);
+        Ok(Self::Slice(&mut vector[original_len..new_len]))
+    }
+}
+
+// Structure that keeps track of current output buffer
+enum OutputData<'a> {
+    DataBuffer(&'a mut Vec<u8>),
+    MemoryReference(MemoryBufferReference, usize),
 }
 
 fn get_mmap_prot_flags(memory_buffer: &MemoryBufferAidl) -> u32 {
@@ -117,6 +169,12 @@ struct MemoryBufferSlice {
 
 impl From<&MemoryBufferReference> for MemoryBufferSlice {
     fn from(value: &MemoryBufferReference) -> Self {
+        MemoryBufferSlice { start_offset: value.startOffset, size_bytes: value.sizeBytes }
+    }
+}
+
+impl From<&mut MemoryBufferReference> for MemoryBufferSlice {
+    fn from(value: &mut MemoryBufferReference) -> Self {
         MemoryBufferSlice { start_offset: value.startOffset, size_bytes: value.sizeBytes }
     }
 }
@@ -155,10 +213,29 @@ impl MemoryBufferReferenceWithType {
     }
 }
 
+/// Given a `MemoryBufferReference` it checks that its elements are valid (buffer_start should be
+/// positive and buffer_size should be greater than 0) and then returns the memory reference
+/// start/stop/size as an `usize` tuple
+fn get_limits(
+    buffer_reference: &MemoryBufferReferenceWithType,
+) -> Result<(usize, usize, usize), HwCryptoError> {
+    let buffer_size = buffer_reference.len()?;
+    let buffer_start = buffer_reference.start_offset()?;
+    if buffer_size == 0 {
+        return Err(hwcrypto_err!(BAD_PARAMETER, "buffer reference size shouldn't be 0"));
+    }
+    // Because both values are positive and originally signed, then the unsigned addition should not
+    // overflow. Using a checked add in case we can change these values to unsigned
+    // in the future
+    if let Some(buffer_end) = buffer_size.checked_add(buffer_start) {
+        Ok((buffer_start, buffer_end, buffer_size))
+    } else {
+        Err(hwcrypto_err!(BAD_PARAMETER, "buffer end overflowed"))
+    }
+}
+
 // TODO: This type is still a WIP.
 struct MemoryBuffer {
-    #[allow(dead_code)]
-    mem_buffer: VolatileSlice<'static>,
     buffer_ptr: NonNull<u8>,
     total_size: usize,
 }
@@ -174,7 +251,6 @@ impl MemoryBuffer {
         let buffer_handle = match &memory_buffer_parameters.bufferHandle {
             MemoryBufferAidl::Input(handle) | MemoryBufferAidl::Output(handle) => handle,
         };
-
         let buffer_handle = buffer_handle
             .as_ref()
             .ok_or_else(|| hwcrypto_err!(BAD_PARAMETER, "received a null buffer handle"))?;
@@ -200,15 +276,28 @@ impl MemoryBuffer {
         let buffer_ptr = NonNull::new(buffer_ptr as *mut u8)
             .ok_or(hwcrypto_err!(BAD_PARAMETER, "buffer_ptr was NULL"))?;
         // cast is correct because buffer_size is an u32
-        let buffer_size = buffer_size as usize;
+        let total_size = buffer_size as usize;
 
+        Ok(Self { buffer_ptr, total_size })
+    }
+
+    fn get_memory_slice<'a>(&'a mut self) -> Result<VolatileSlice<'a>, HwCryptoError> {
         // SAFETY: Memory at address `buffer_ptr` has length `buffer_size` because if not mmap
         //         operation would have failed. All accesses to this memory on this service are
-        //         through the VolatileSlice methods, so accesses are volatile accesses. Memory
-        //         is only unmapped on drop, so it will available for the lifetime of the
+        //         through the VolatileSlice methods, so accesses are volatile accesses. Memory is
+        //         only unmapped on drop, so it will available for the lifetime of the
         //         `VolatileSlice`.
-        let mem_buffer = unsafe { VolatileSlice::new(buffer_ptr.as_ptr(), buffer_size) };
-        Ok(Self { mem_buffer, buffer_ptr, total_size: buffer_size })
+        let mem_buffer = unsafe { VolatileSlice::new(self.buffer_ptr.as_ptr(), self.total_size) };
+        Ok(mem_buffer)
+    }
+
+    fn get_subslice_as_data_to_process<'a>(
+        &'a mut self,
+        start: usize,
+        size: usize,
+    ) -> Result<DataToProcess<'a>, HwCryptoError> {
+        let mem_buffer = self.get_memory_slice()?;
+        Ok(DataToProcess::VolatileSlice(mem_buffer.subslice(start, size)?))
     }
 }
 
@@ -226,7 +315,6 @@ impl Drop for MemoryBuffer {
 struct CmdProcessorContext {
     current_input_memory_buffer: Option<MemoryBuffer>,
     current_output_memory_buffer: Option<MemoryBuffer>,
-    current_output_data: Option<OutputData>,
     current_state: CmdProcessorState,
 }
 
@@ -236,7 +324,6 @@ impl CmdProcessorContext {
         Self {
             current_input_memory_buffer: None,
             current_output_memory_buffer: None,
-            current_output_data: None,
             current_state: CmdProcessorState::InitialState,
         }
     }
@@ -291,12 +378,11 @@ impl CmdProcessorContext {
     fn set_memory_buffer_step(
         &mut self,
         parameters: &MemoryBufferParameter,
-        _step: usize,
-        _previous_operations: &[CryptoOperation],
+        current_output_ref: &mut Option<OutputData>,
     ) -> Result<(), HwCryptoError> {
-        let current_memory_buffer = match &parameters.bufferHandle {
-            MemoryBufferAidl::Input(_) => &mut self.current_input_memory_buffer,
-            MemoryBufferAidl::Output(_) => &mut self.current_output_memory_buffer,
+        let (current_memory_buffer, buffer_is_output) = match &parameters.bufferHandle {
+            MemoryBufferAidl::Input(_) => (&mut self.current_input_memory_buffer, false),
+            MemoryBufferAidl::Output(_) => (&mut self.current_output_memory_buffer, true),
         };
         if current_memory_buffer.is_some() {
             Err(hwcrypto_err!(BAD_PARAMETER, "Memory buffer already set"))
@@ -304,134 +390,218 @@ impl CmdProcessorContext {
             if parameters.sizeBytes < 0 {
                 Err(hwcrypto_err!(BAD_PARAMETER, "Memory buffer size is negative"))
             } else {
+                // With the current behaviour, next check should not be needed, because we can only
+                // set up the current_memory_buffer once and we can only set the current_output_ref
+                // after setting a current output memory buffer. Leaving the check here in case the
+                // behavior changes in the future
+                if buffer_is_output {
+                    if let Some(OutputData::MemoryReference(_, _)) = current_output_ref {
+                        // If the current output is a buffer reference, we need to invalidate it
+                        return Err(hwcrypto_err!(BAD_PARAMETER, "This should not be possible with current flow, we need to invalidate the current output reference now."));
+                    }
+                }
                 *current_memory_buffer = Some(MemoryBuffer::new(parameters)?);
                 Ok(())
             }
         }
     }
 
-    fn add_output_step(
+    fn add_output_step<'a>(
         &mut self,
-        output_parameters: &OperationData,
-        step: usize,
-        _previous_operations: &[CryptoOperation],
-    ) -> Result<(), HwCryptoError> {
+        output_parameters: &'a mut OperationData,
+    ) -> Result<OutputData<'a>, HwCryptoError> {
         match output_parameters {
-            OperationData::DataBuffer(_) => {
-                // A data buffer (Vector) doesn't have a size limit because you can keep
-                // pushing data into it
-                self.current_output_data = Some(OutputData { step, remaining_size: None })
-            }
+            OperationData::DataBuffer(buf) => Ok(OutputData::DataBuffer(buf)),
             OperationData::MemoryBufferReference(buffer_reference) => {
-                self.current_output_data = Some(OutputData {
-                    step,
-                    remaining_size: Some(self.get_data_buffer_size(
-                        &MemoryBufferReferenceWithType::Output(buffer_reference.into()),
-                    )?),
-                })
+                let buff_ref = MemoryBufferReference {
+                    startOffset: buffer_reference.startOffset,
+                    sizeBytes: buffer_reference.sizeBytes,
+                };
+                Ok(OutputData::MemoryReference(
+                    buff_ref,
+                    self.get_data_buffer_size(&MemoryBufferReferenceWithType::Output(
+                        buffer_reference.into(),
+                    ))?,
+                ))
             }
-        };
-        Ok(())
+        }
     }
 
-    #[allow(dead_code)]
-    fn set_current_output_remaining_size(
+    fn copy_step(
         &mut self,
-        remaining_size: usize,
+        copy_parameters: &mut OperationData,
+        current_output_ref: &mut Option<OutputData>,
     ) -> Result<(), HwCryptoError> {
-        match &mut self.current_output_data {
-            Some(current_output) => {
-                current_output.remaining_size = Some(remaining_size);
-                Ok(())
-            }
-            None => Err(hwcrypto_err!(ALLOCATION_ERROR, "no output buffer available")),
+        // Doing this check here to keep the borrow checker happy because the next step borrows self
+        // mutably. This is because even though it is an input, if it is a buffer reference, the
+        // available method could potentially be use to modify the underlying memory buffer.
+        if let Some(OutputData::MemoryReference(buff_ref, _)) = current_output_ref.as_ref() {
+            self.check_memory_reference_in_range(&MemoryBufferReferenceWithType::Output(
+                buff_ref.into(),
+            ))?;
         }
+        // Creating a `DataToProcess` variable to abstract away where the input is located
+        let input = match copy_parameters {
+            OperationData::MemoryBufferReference(buffer_reference) => {
+                let buffer_reference =
+                    MemoryBufferReferenceWithType::Input(buffer_reference.into());
+                self.check_memory_reference_in_range(&buffer_reference)?;
+                let (input_start, _input_stop, input_size) = get_limits(&buffer_reference)?;
+                self.current_input_memory_buffer
+                    .as_mut()
+                    .ok_or(hwcrypto_err!(BAD_PARAMETER, "input buffer not set yet"))?
+                    .get_subslice_as_data_to_process(input_start, input_size)?
+            }
+            OperationData::DataBuffer(input) => DataToProcess::Slice(&mut input[..]),
+        };
+        if input.len() == 0 {
+            return Err(hwcrypto_err!(BAD_PARAMETER, "received an input of size 0"));
+        }
+        let req_output_size = input.len();
+
+        // Getting a reference to the output for the copy operation
+        match current_output_ref
+            .as_mut()
+            .ok_or(hwcrypto_err!(BAD_PARAMETER, "no output buffer available"))?
+        {
+            OutputData::DataBuffer(output_vec) => {
+                // We are copying into a vector, as long as we can resize the vector we can fit
+                // the result
+                let mut output_buff =
+                    DataToProcess::allocate_buffer_end_vector(*output_vec, req_output_size)?;
+                output_buff.copy_from_slice(&input)?;
+            }
+            OutputData::MemoryReference(output_buff_ref, remaining_size) => {
+                if req_output_size > *remaining_size {
+                    return Err(hwcrypto_err!(ALLOCATION_ERROR, "run out of space output buffer"));
+                }
+                let (_output_start, output_stop, _output_size) =
+                    get_limits(&MemoryBufferReferenceWithType::Output(output_buff_ref.into()))?;
+                // We are automatically filling up the output buffer with the received input, so
+                // the first available position will be equal to the end of the buffer minus the
+                // remaining space:
+                //
+                //         |---------------------_output_size------------------------------|
+                //         |--------used space--------|----------remaining_size------------|
+                //         |xxxxxxxxxxxxxxxxxxxxxxxxxx|====================================|
+                // _output_start                output_start_offset                    output_stop
+                //
+                let output_start_offset = output_stop - *remaining_size;
+                let mut output_slice = self
+                    .current_output_memory_buffer
+                    .as_mut()
+                    .ok_or(hwcrypto_err!(BAD_PARAMETER, "output buffer not set yet"))?
+                    .get_subslice_as_data_to_process(output_start_offset, req_output_size)?;
+
+                output_slice.copy_from_slice(&input)?;
+                *remaining_size = *remaining_size - req_output_size;
+            }
+        }
+        Ok(())
     }
 
     fn destroy_step(
         &mut self,
-        _step: usize,
-        _previous_operations: &[CryptoOperation],
+        current_output_ref: &mut Option<OutputData>,
     ) -> Result<(), HwCryptoError> {
         self.current_input_memory_buffer = None;
         self.current_output_memory_buffer = None;
-        self.current_output_data = None;
+        *current_output_ref = None;
         self.current_state = CmdProcessorState::Destroyed;
         Ok(())
     }
 
     #[allow(dead_code)]
-    fn process_step(
+    fn process_all_steps(
         &mut self,
-        step: usize,
         operations: &mut [CryptoOperation],
     ) -> Result<(), HwCryptoError> {
-        if step >= operations.len() {
-            return Err(hwcrypto_err!(
-                BAD_PARAMETER,
-                "Step to process {} exceeds command list length {}",
-                step,
-                operations.len()
-            ));
+        if operations.is_empty() {
+            return Err(hwcrypto_err!(BAD_PARAMETER, "Cannot process list of length 0",));
         }
-        let (previous_operations, operation) = operations.split_at_mut(step);
-        let current_step = &operation[0];
-        match self.current_state {
-            CmdProcessorState::InitialState => match current_step {
-                CryptoOperation::DataOutput(step_data) => {
-                    self.add_output_step(&step_data, step, previous_operations)
+        let mut curr_output: Option<OutputData> = None;
+        for current_step in operations {
+            match self.current_state {
+                CmdProcessorState::InitialState => match current_step {
+                    CryptoOperation::DataOutput(step_data) => {
+                        curr_output = Some(self.add_output_step(step_data)?);
+                    }
+                    CryptoOperation::CopyData(step_data) => {
+                        self.copy_step(step_data, &mut curr_output)?;
+                    }
+                    CryptoOperation::DestroyContext(_) => self.destroy_step(&mut curr_output)?,
+                    CryptoOperation::SetMemoryBuffer(step_data) => {
+                        self.set_memory_buffer_step(&step_data, &mut curr_output)?
+                    }
+                    CryptoOperation::SetOperationParameters(_step_data) => {
+                        self.current_state = CmdProcessorState::RunningOperation;
+                        unimplemented!(
+                            "SetOperationParameters from InitialState not implemented yet"
+                        )
+                    }
+                    CryptoOperation::SetPattern(_) => {
+                        return Err(hwcrypto_err!(
+                            BAD_PARAMETER,
+                            "SetPattern not permitted before calling SetOperationParameters"
+                        ))
+                    }
+                    CryptoOperation::DataInput(_) => {
+                        return Err(hwcrypto_err!(
+                            BAD_PARAMETER,
+                            "DataInput not permitted before calling SetOperationParameters"
+                        ))
+                    }
+                    CryptoOperation::AadInput(_) => {
+                        return Err(hwcrypto_err!(
+                            BAD_PARAMETER,
+                            "AadInput not permitted before calling SetOperationParameters"
+                        ))
+                    }
+                    CryptoOperation::Finish(_) => {
+                        return Err(hwcrypto_err!(
+                            BAD_PARAMETER,
+                            "Finish not permitted before calling SetOperationParameters"
+                        ))
+                    }
+                },
+                CmdProcessorState::RunningOperation => match current_step {
+                    CryptoOperation::DataOutput(step_data) => {
+                        curr_output = Some(self.add_output_step(step_data)?);
+                    }
+                    CryptoOperation::CopyData(step_data) => {
+                        self.copy_step(step_data, &mut curr_output)?;
+                    }
+                    CryptoOperation::DestroyContext(_) => self.destroy_step(&mut curr_output)?,
+                    CryptoOperation::Finish(_step_data) => {
+                        self.current_state = CmdProcessorState::InitialState;
+                        unimplemented!("Finish not implemented yet")
+                    }
+                    CryptoOperation::SetPattern(_) => {
+                        unimplemented!("SetPattern not implemented yet")
+                    }
+                    CryptoOperation::DataInput(_) => {
+                        unimplemented!("DataInput not implemented yet")
+                    }
+                    CryptoOperation::AadInput(_) => unimplemented!("AadInput not implemented yet"),
+                    CryptoOperation::SetOperationParameters(_step) => unimplemented!(
+                        "SetOperationParameters from RunningOperation not implemented yet"
+                    ),
+                    CryptoOperation::SetMemoryBuffer(_) => {
+                        return Err(hwcrypto_err!(
+                        BAD_PARAMETER,
+                        "SetMemoryBuffer not permitted once SetOperationParameters has been called"
+                    ))
+                    }
+                },
+                CmdProcessorState::Destroyed => {
+                    return Err(hwcrypto_err!(
+                        BAD_PARAMETER,
+                        "Cannot send any command after DestroyContext"
+                    ));
                 }
-                CryptoOperation::CopyData(_) => unimplemented!("copy step not implemented yet"),
-                CryptoOperation::DestroyContext(_) => self.destroy_step(step, previous_operations),
-                CryptoOperation::SetMemoryBuffer(step_data) => {
-                    self.set_memory_buffer_step(&step_data, step, previous_operations)
-                }
-                CryptoOperation::SetOperationParameters(_step_data) => {
-                    self.current_state = CmdProcessorState::RunningOperation;
-                    unimplemented!("SetOperationParameters from InitialState not implemented yet")
-                }
-                CryptoOperation::SetPattern(_) => Err(hwcrypto_err!(
-                    BAD_PARAMETER,
-                    "SetPattern not permitted before calling SetOperationParameters"
-                )),
-                CryptoOperation::DataInput(_) => Err(hwcrypto_err!(
-                    BAD_PARAMETER,
-                    "DataInput not permitted before calling SetOperationParameters"
-                )),
-                CryptoOperation::AadInput(_) => Err(hwcrypto_err!(
-                    BAD_PARAMETER,
-                    "AadInput not permitted before calling SetOperationParameters"
-                )),
-                CryptoOperation::Finish(_) => Err(hwcrypto_err!(
-                    BAD_PARAMETER,
-                    "Finish not permitted before calling SetOperationParameters"
-                )),
-            },
-            CmdProcessorState::RunningOperation => match current_step {
-                CryptoOperation::DataOutput(step_data) => {
-                    self.add_output_step(&step_data, step, previous_operations)
-                }
-                CryptoOperation::CopyData(_) => unimplemented!("copy step not implemented yet"),
-                CryptoOperation::DestroyContext(_) => self.destroy_step(step, previous_operations),
-                CryptoOperation::Finish(_step_data) => {
-                    self.current_state = CmdProcessorState::InitialState;
-                    unimplemented!("Finish not implemented yet")
-                }
-                CryptoOperation::SetPattern(_) => unimplemented!("SetPattern not implemented yet"),
-                CryptoOperation::DataInput(_) => unimplemented!("DataInput not implemented yet"),
-                CryptoOperation::AadInput(_) => unimplemented!("AadInput not implemented yet"),
-                CryptoOperation::SetOperationParameters(_step) => unimplemented!(
-                    "SetOperationParameters from RunningOperation not implemented yet"
-                ),
-                CryptoOperation::SetMemoryBuffer(_) => Err(hwcrypto_err!(
-                    BAD_PARAMETER,
-                    "SetMemoryBuffer not permitted once SetOperationParameters has been called"
-                )),
-            },
-            CmdProcessorState::Destroyed => {
-                Err(hwcrypto_err!(BAD_PARAMETER, "Cannot send any command after DestroyContext"))
             }
         }
+        Ok(())
     }
 }
 
@@ -456,7 +626,6 @@ mod tests {
     use std::alloc::{alloc_zeroed, dealloc, Layout};
     use std::os::fd::{FromRawFd, OwnedFd};
     use test::{expect, expect_eq};
-    use vm_memory::Bytes;
 
     /// Structure only intended to use on unit tests. It will allocate a single memory page and
     /// create a memref to it.
@@ -481,7 +650,10 @@ mod tests {
                 )
             })?;
             // SAFETY: Layout is non-zero
-            let allocated_buffer = unsafe { alloc_zeroed(layout) };
+            let allocated_buffer = unsafe {
+                let ptr = alloc_zeroed(layout);
+                ptr
+            };
             // Always mapping things as output to change the buffer values for tests
             let prot_flags = OUTPUT_MEMORY_BUFFER_FLAGS;
             // SAFETY: address and size are correct because they came from the allocation.
@@ -560,15 +732,24 @@ mod tests {
         buf: &mut [u8],
         start: usize,
     ) -> Result<(), HwCryptoError> {
-        memory_buffer.mem_buffer.read_slice(buf, start).map_err(HwCryptoError::from)
+        // SAFETY: Memory at address `buffer_ptr` has length `buffer_size` because if not mmap
+        //         operation would have failed. All accesses to this memory on this service are
+        //         through the VolatileSlice methods, so accesses are volatile accesses. Memory
+        //         is only unmapped on drop, so it will available for the lifetime of the
+        //         `VolatileSlice`.
+        let mem_buffer = unsafe {
+            VolatileSlice::new(memory_buffer.buffer_ptr.as_ptr(), memory_buffer.total_size)
+        };
+        mem_buffer.read_slice(buf, start).map_err(HwCryptoError::from)
     }
 
     fn write_slice(
-        memory_buffer: &MemoryBuffer,
+        memory_buffer: &mut MemoryBuffer,
         buf: &[u8],
         start: usize,
     ) -> Result<(), HwCryptoError> {
-        Ok(memory_buffer.mem_buffer.write_slice(buf, start)?)
+        let mem_buffer = memory_buffer.get_memory_slice()?;
+        Ok(mem_buffer.write_slice(buf, start)?)
     }
 
     #[test]
@@ -583,8 +764,8 @@ mod tests {
             )),
             sizeBytes: total_buffer_size as i32,
         };
-        let memory_buffer =
-            MemoryBuffer::new(&mem_buffer_parameters).expect("Couldn't create a memory buffer");
+        let mut memory_buffer =
+            MemoryBuffer::new(&mem_buffer_parameters).expect("Couldn't createa memory buffer");
 
         let mut slice = vec![0; 5];
 
@@ -606,7 +787,7 @@ mod tests {
         read_slice(&memory_buffer, &mut slice[0..3], 4).expect("couldn't get slice");
         expect_eq!(&slice[0..3], &[5, 6, 7], "wrong value retrieved through slice");
 
-        write_slice(&memory_buffer, &[55], 5).expect("couldn't write slice");
+        write_slice(&mut memory_buffer, &[55], 5).expect("couldn't write slice");
         read_slice(&memory_buffer, &mut slice[0..3], 4).expect("couldn't get slice");
         expect_eq!(&slice[0..3], &[5, 55, 7], "wrong value retrieved through slice");
 
@@ -629,55 +810,56 @@ mod tests {
         let mut cmd_processor = CmdProcessorContext::new();
 
         cmd_list.push(CryptoOperation::SetMemoryBuffer(mem_buffer_parameters));
+        let process_result = cmd_processor.process_all_steps(&mut cmd_list);
+        expect!(process_result.is_ok(), "Couldn't process SetMemoryBuffer command");
         let mem_reference = MemoryBufferReference { startOffset: 0, sizeBytes: 3 };
         cmd_list
             .push(CryptoOperation::DataOutput(OperationData::MemoryBufferReference(mem_reference)));
 
-        let process_result = cmd_processor.process_step(0, &mut cmd_list);
-        expect!(process_result.is_ok(), "Couldn't process SetMemoryBuffer command");
-
-        let process_result = cmd_processor.process_step(1, &mut cmd_list);
+        let mut cmd_processor = CmdProcessorContext::new();
+        let process_result = cmd_processor.process_all_steps(&mut cmd_list);
         expect!(process_result.is_ok(), "Couldn't process valid memory reference");
 
-        let mem_reference =
-            MemoryBufferReference { startOffset: total_buffer_size as i32, sizeBytes: 1 };
-        cmd_list
-            .push(CryptoOperation::DataOutput(OperationData::MemoryBufferReference(mem_reference)));
-
-        let process_result = cmd_processor.process_step(2, &mut cmd_list);
+        let mem_ref = MemoryBufferReference { startOffset: total_buffer_size as i32, sizeBytes: 1 };
+        cmd_list[1] = CryptoOperation::DataOutput(OperationData::MemoryBufferReference(mem_ref));
+        let mut cmd_processor = CmdProcessorContext::new();
+        let process_result = cmd_processor.process_all_steps(&mut cmd_list);
         expect!(
             process_result.is_err(),
             "Shouldn't be able to process reference outside of buffer"
         );
 
-        let mem_reference =
-            MemoryBufferReference { startOffset: total_buffer_size as i32, sizeBytes: 0 };
-        cmd_list
-            .push(CryptoOperation::DataOutput(OperationData::MemoryBufferReference(mem_reference)));
-        let process_result = cmd_processor.process_step(3, &mut cmd_list);
+        let mem_ref = MemoryBufferReference { startOffset: total_buffer_size as i32, sizeBytes: 0 };
+        cmd_list[1] = CryptoOperation::DataOutput(OperationData::MemoryBufferReference(mem_ref));
+        let mut cmd_processor = CmdProcessorContext::new();
+        let process_result = cmd_processor.process_all_steps(&mut cmd_list);
         expect!(
             process_result.is_err(),
             "Shouldn't be able to process reference outside of buffer"
         );
 
-        let mem_reference = MemoryBufferReference { startOffset: 3, sizeBytes: 0 };
-        cmd_list
-            .push(CryptoOperation::DataOutput(OperationData::MemoryBufferReference(mem_reference)));
-        let process_result = cmd_processor.process_step(4, &mut cmd_list);
+        let mem_ref = MemoryBufferReference { startOffset: 3, sizeBytes: 0 };
+        cmd_list[1] = CryptoOperation::DataOutput(OperationData::MemoryBufferReference(mem_ref));
+        let mut cmd_processor = CmdProcessorContext::new();
+        let process_result = cmd_processor.process_all_steps(&mut cmd_list);
         expect!(process_result.is_err(), "Shouldn't be able to process 0 size references");
 
-        let mem_reference =
+        let mem_ref =
             MemoryBufferReference { startOffset: total_buffer_size as i32 - 1, sizeBytes: 1 };
-        cmd_list
-            .push(CryptoOperation::DataOutput(OperationData::MemoryBufferReference(mem_reference)));
-        let process_result = cmd_processor.process_step(5, &mut cmd_list);
-        expect!(process_result.is_ok(), "Couldn't process valid memory reference");
+        cmd_list[1] = CryptoOperation::DataOutput(OperationData::MemoryBufferReference(mem_ref));
+        let mut cmd_processor = CmdProcessorContext::new();
+        let process_result = cmd_processor.process_all_steps(&mut cmd_list);
+        expect!(
+            process_result.is_ok(),
+            "Couldn't process a valid memory reference, len {}",
+            cmd_list.len()
+        );
 
-        let mem_reference =
+        let mem_ref =
             MemoryBufferReference { startOffset: total_buffer_size as i32 - 1, sizeBytes: 2 };
-        cmd_list
-            .push(CryptoOperation::DataOutput(OperationData::MemoryBufferReference(mem_reference)));
-        let process_result = cmd_processor.process_step(6, &mut cmd_list);
+        cmd_list[1] = CryptoOperation::DataOutput(OperationData::MemoryBufferReference(mem_ref));
+        let mut cmd_processor = CmdProcessorContext::new();
+        let process_result = cmd_processor.process_all_steps(&mut cmd_list);
         expect!(
             process_result.is_err(),
             "Shouldn't be able to process reference that falls out of range"
@@ -689,26 +871,23 @@ mod tests {
         let mut cmd_list = Vec::<CryptoOperation>::new();
         let mut cmd_processor = CmdProcessorContext::new();
 
-        let process_result = cmd_processor.process_step(0, &mut cmd_list);
-        let e = process_result.unwrap_err();
-        expect!(
-            e.matches_hal_error_code(HalErrorCode::BAD_PARAMETER),
-            "should have received a BAD_PARAMETER error"
-        );
+        let process_result = cmd_processor.process_all_steps(&mut cmd_list);
+        match &process_result {
+            Err(e) => expect!(
+                e.matches_hal_error_code(HalErrorCode::BAD_PARAMETER),
+                "should have received a BAD_PARAMETER error"
+            ),
+            Ok(_) => expect!(process_result.is_err(), "Should have received an error"),
+        };
 
-        let process_result = cmd_processor.process_step(0, &mut cmd_list);
-        let e = process_result.unwrap_err();
-        expect!(
-            e.matches_hal_error_code(HalErrorCode::BAD_PARAMETER),
-            "should have received a BAD_PARAMETER error"
-        );
-
-        let process_result = cmd_processor.process_step(1, &mut cmd_list);
-        let e = process_result.unwrap_err();
-        expect!(
-            e.matches_hal_error_code(HalErrorCode::BAD_PARAMETER),
-            "should have received a BAD_PARAMETER error"
-        );
+        let process_result = cmd_processor.process_all_steps(&mut cmd_list);
+        match &process_result {
+            Err(e) => expect!(
+                e.matches_hal_error_code(HalErrorCode::BAD_PARAMETER),
+                "should have received a BAD_PARAMETER error"
+            ),
+            Ok(_) => expect!(process_result.is_err(), "Should have received an error"),
+        };
     }
 
     #[test]
@@ -717,7 +896,7 @@ mod tests {
         let mut cmd_processor = CmdProcessorContext::new();
         let data_output = OperationData::DataBuffer(Vec::new());
         cmd_list.push(CryptoOperation::DataOutput(data_output));
-        let process_result = cmd_processor.process_step(0, &mut cmd_list);
+        let process_result = cmd_processor.process_all_steps(&mut cmd_list);
         expect!(process_result.is_ok(), "Couldn't process command");
     }
 
@@ -726,26 +905,30 @@ mod tests {
         let mut cmd_list = Vec::<CryptoOperation>::new();
         let mut cmd_processor = CmdProcessorContext::new();
         cmd_list.push(CryptoOperation::DataInput(OperationData::DataBuffer(Vec::new())));
+        let process_result = cmd_processor.process_all_steps(&mut cmd_list);
+        expect!(process_result.is_err(), "Shouldn't be able to call DataInput on initial state");
+        let mut cmd_list = Vec::<CryptoOperation>::new();
+        let mut cmd_processor = CmdProcessorContext::new();
         cmd_list.push(CryptoOperation::AadInput(OperationData::DataBuffer(Vec::new())));
+
+        let process_result = cmd_processor.process_all_steps(&mut cmd_list);
+        expect!(process_result.is_err(), "Shouldn't be able to call AadInput on initial state");
+        let mut cmd_list = Vec::<CryptoOperation>::new();
+        let mut cmd_processor = CmdProcessorContext::new();
         let pattern_params = PatternParameters { numberBlocksProcess: 1, numberBlocksCopy: 9 };
         cmd_list.push(CryptoOperation::SetPattern(pattern_params));
-        cmd_list.push(CryptoOperation::Finish(None));
-        cmd_list.push(CryptoOperation::DataOutput(OperationData::DataBuffer(Vec::new())));
-
-        let process_result = cmd_processor.process_step(0, &mut cmd_list);
-        expect!(process_result.is_err(), "Shouldn't be able to call DataInput on initial state");
-        let process_result = cmd_processor.process_step(1, &mut cmd_list);
-        expect!(process_result.is_err(), "Shouldn't be able to call AadInput on initial state");
-        let process_result = cmd_processor.process_step(2, &mut cmd_list);
+        let process_result = cmd_processor.process_all_steps(&mut cmd_list);
         expect!(process_result.is_err(), "Shouldn't be able to call SetPattern on initial state");
-        let process_result = cmd_processor.process_step(3, &mut cmd_list);
+        let mut cmd_list = Vec::<CryptoOperation>::new();
+        let mut cmd_processor = CmdProcessorContext::new();
+        cmd_list.push(CryptoOperation::Finish(None));
+        let process_result = cmd_processor.process_all_steps(&mut cmd_list);
         expect!(process_result.is_err(), "Shouldn't be able to call Finish on initial state");
-        let process_result = cmd_processor.process_step(4, &mut cmd_list);
+        let mut cmd_list = Vec::<CryptoOperation>::new();
+        let mut cmd_processor = CmdProcessorContext::new();
+        cmd_list.push(CryptoOperation::DataOutput(OperationData::DataBuffer(Vec::new())));
+        let process_result = cmd_processor.process_all_steps(&mut cmd_list);
         expect!(process_result.is_ok(), "Should be able to call DataOutput");
-        let process_result = cmd_processor.process_step(0, &mut cmd_list);
-        expect!(process_result.is_err(), "Shouldn't be able to call DataInput on initial state");
-        let process_result = cmd_processor.process_step(1, &mut cmd_list);
-        expect!(process_result.is_err(), "Shouldn't be able to call AadInput on initial state");
     }
 
     #[test]
@@ -753,12 +936,29 @@ mod tests {
         let mut cmd_list = Vec::<CryptoOperation>::new();
         let mut cmd_processor = CmdProcessorContext::new();
         cmd_list.push(CryptoOperation::DestroyContext(None));
+        let process_result = cmd_processor.process_all_steps(&mut cmd_list);
+        expect!(process_result.is_ok(), "Should be able to call DestroyContext");
+        let mut cmd_processor = CmdProcessorContext::new();
         cmd_list.push(CryptoOperation::DataOutput(OperationData::DataBuffer(Vec::new())));
-        cmd_list.push(CryptoOperation::DataInput(OperationData::DataBuffer(Vec::new())));
-        cmd_list.push(CryptoOperation::AadInput(OperationData::DataBuffer(Vec::new())));
+        let process_result = cmd_processor.process_all_steps(&mut cmd_list);
+        expect!(process_result.is_err(), "Shouldn't be able to call DataOutput on destroyed state");
+        let mut cmd_processor = CmdProcessorContext::new();
+        cmd_list[1] = CryptoOperation::DataInput(OperationData::DataBuffer(Vec::new()));
+        let process_result = cmd_processor.process_all_steps(&mut cmd_list);
+        expect!(process_result.is_err(), "Shouldn't be able to call DataInput on destroyed state");
+        let mut cmd_processor = CmdProcessorContext::new();
+        cmd_list[1] = CryptoOperation::AadInput(OperationData::DataBuffer(Vec::new()));
+        let process_result = cmd_processor.process_all_steps(&mut cmd_list);
+        expect!(process_result.is_err(), "Shouldn't be able to call AadInput on destroyed state");
         let pattern_params = PatternParameters { numberBlocksProcess: 1, numberBlocksCopy: 9 };
-        cmd_list.push(CryptoOperation::SetPattern(pattern_params));
-        cmd_list.push(CryptoOperation::Finish(None));
+        cmd_list[1] = CryptoOperation::SetPattern(pattern_params);
+        let mut cmd_processor = CmdProcessorContext::new();
+        let process_result = cmd_processor.process_all_steps(&mut cmd_list);
+        expect!(process_result.is_err(), "Shouldn't be able to call SetPattern on destroyed state");
+        cmd_list[1] = CryptoOperation::Finish(None);
+        let mut cmd_processor = CmdProcessorContext::new();
+        let process_result = cmd_processor.process_all_steps(&mut cmd_list);
+        expect!(process_result.is_err(), "Shouldn't be able to call Finish on destroyed state");
         let policy = KeyPolicy {
             usage: KeyUse::SIGN,
             keyLifetime: KeyLifetime::EPHEMERAL,
@@ -777,25 +977,223 @@ mod tests {
             direction: SymmetricOperation::ENCRYPT,
             parameters: mode,
         };
-        cmd_list.push(CryptoOperation::SetOperationParameters(
+        cmd_list[1] = CryptoOperation::SetOperationParameters(
             OperationParameters::SymmetricCrypto(op_parameters),
-        ));
-        let process_result = cmd_processor.process_step(0, &mut cmd_list);
-        expect!(process_result.is_ok(), "Should be able to call DestroyContext");
-        let process_result = cmd_processor.process_step(1, &mut cmd_list);
-        expect!(process_result.is_err(), "Shouldn't be able to call DataOutput on destroyed state");
-        let process_result = cmd_processor.process_step(2, &mut cmd_list);
-        expect!(process_result.is_err(), "Shouldn't be able to call DataInput on destroyed state");
-        let process_result = cmd_processor.process_step(3, &mut cmd_list);
-        expect!(process_result.is_err(), "Shouldn't be able to call AadInput on destroyed state");
-        let process_result = cmd_processor.process_step(4, &mut cmd_list);
-        expect!(process_result.is_err(), "Shouldn't be able to call SetPattern on destroyed state");
-        let process_result = cmd_processor.process_step(5, &mut cmd_list);
-        expect!(process_result.is_err(), "Shouldn't be able to call Finish on destroyed state");
-        let process_result = cmd_processor.process_step(6, &mut cmd_list);
+        );
+        let mut cmd_processor = CmdProcessorContext::new();
+        let process_result = cmd_processor.process_all_steps(&mut cmd_list);
         expect!(
             process_result.is_err(),
             "Shouldn't be able to call SetOperationParameters on destroyed state"
         );
+    }
+
+    #[test]
+    fn check_output_step_length() {
+        let alloc_size = TestPageAllocator::get_allocation_size();
+        let mut output_page = TestPageAllocator::new().expect("couldn't create test page");
+        let output_memory_buffer = MemoryBufferParameter {
+            bufferHandle: MemoryBufferAidl::Output(Some(
+                output_page.get_parcel_file_descriptor().expect("couldn't get fd"),
+            )),
+            sizeBytes: alloc_size as i32,
+        };
+        let mut cmd_list = Vec::<CryptoOperation>::new();
+        let mut cmd_processor = CmdProcessorContext::new();
+        cmd_list.push(CryptoOperation::SetMemoryBuffer(output_memory_buffer));
+        let output_reference = MemoryBufferReference { startOffset: 0, sizeBytes: 3 };
+        cmd_list.push(CryptoOperation::DataOutput(OperationData::MemoryBufferReference(
+            output_reference,
+        )));
+        cmd_list.push(CryptoOperation::CopyData(OperationData::DataBuffer(vec![1, 2, 3])));
+        let process_result = cmd_processor.process_all_steps(&mut cmd_list);
+        expect!(process_result.is_ok(), "Couldn't process command");
+        let mut read_slice_val = vec![55; 9];
+        let mem_buffer = cmd_processor.current_output_memory_buffer.as_ref().unwrap();
+        read_slice(&mem_buffer, &mut read_slice_val[..], 0).unwrap();
+        expect_eq!(
+            &read_slice_val[..],
+            &[1, 2, 3, 0, 0, 0, 0, 0, 0],
+            "unexpected values after copy"
+        );
+
+        cmd_list.push(CryptoOperation::CopyData(OperationData::DataBuffer(vec![4, 5, 6])));
+        let mut cmd_processor = CmdProcessorContext::new();
+        let process_result = cmd_processor.process_all_steps(&mut cmd_list);
+        expect!(
+            process_result.is_err(),
+            "Command should have failed because we run out of output buffer"
+        );
+        let mem_buffer = cmd_processor.current_output_memory_buffer.as_ref().unwrap();
+        read_slice(&mem_buffer, &mut read_slice_val[..], 0).unwrap();
+        expect_eq!(
+            &read_slice_val[..],
+            &[1, 2, 3, 0, 0, 0, 0, 0, 0],
+            "unexpected values after failed copy"
+        );
+    }
+
+    #[test]
+    fn output_step_out_range() {
+        let alloc_size = TestPageAllocator::get_allocation_size();
+        let mut output_page = TestPageAllocator::new().expect("couldn't get test page");
+        let output_memory_buffer = MemoryBufferParameter {
+            bufferHandle: MemoryBufferAidl::Output(Some(
+                output_page.get_parcel_file_descriptor().expect("couldn't get fd"),
+            )),
+            sizeBytes: alloc_size as i32,
+        };
+        let mut input_page = TestPageAllocator::new().expect("couldn't get test page");
+        let input_memory_buffer = MemoryBufferParameter {
+            bufferHandle: MemoryBufferAidl::Input(Some(
+                input_page.get_parcel_file_descriptor().expect("couldn't get fd"),
+            )),
+            sizeBytes: alloc_size as i32,
+        };
+        let mut cmd_list = Vec::<CryptoOperation>::new();
+        let mut cmd_processor = CmdProcessorContext::new();
+        cmd_list.push(CryptoOperation::SetMemoryBuffer(output_memory_buffer));
+        cmd_list.push(CryptoOperation::SetMemoryBuffer(input_memory_buffer));
+        let output_reference =
+            MemoryBufferReference { startOffset: 0, sizeBytes: (alloc_size + 4) as i32 };
+        cmd_list.push(CryptoOperation::DataOutput(OperationData::MemoryBufferReference(
+            output_reference,
+        )));
+        let process_result = cmd_processor.process_all_steps(&mut cmd_list);
+        expect!(process_result.is_err(), "shouldn't be able to add an output outside of range");
+        let output_reference =
+            MemoryBufferReference { startOffset: 0, sizeBytes: alloc_size as i32 };
+        cmd_list[2] =
+            CryptoOperation::DataOutput(OperationData::MemoryBufferReference(output_reference));
+        let input_reference =
+            MemoryBufferReference { startOffset: 0, sizeBytes: (alloc_size + 4) as i32 };
+        cmd_list
+            .push(CryptoOperation::CopyData(OperationData::MemoryBufferReference(input_reference)));
+        let mut cmd_processor = CmdProcessorContext::new();
+        let process_result = cmd_processor.process_all_steps(&mut cmd_list);
+        expect!(process_result.is_err(), "shouldn't be able to add an input ref outside of range");
+        let input_reference =
+            MemoryBufferReference { startOffset: 0, sizeBytes: alloc_size as i32 };
+        cmd_list[3] =
+            CryptoOperation::CopyData(OperationData::MemoryBufferReference(input_reference));
+        let mut cmd_processor = CmdProcessorContext::new();
+        let process_result = cmd_processor.process_all_steps(&mut cmd_list);
+        expect!(process_result.is_ok(), "operation should have succeeded");
+    }
+
+    #[test]
+    fn memory_reference_copy_operation_on_initial_state() {
+        let alloc_size = TestPageAllocator::get_allocation_size();
+        let mut output_page = TestPageAllocator::new().expect("couldn't get test page");
+        let output_memory_buffer = MemoryBufferParameter {
+            bufferHandle: MemoryBufferAidl::Output(Some(
+                output_page.get_parcel_file_descriptor().expect("couldn't get fd"),
+            )),
+            sizeBytes: alloc_size as i32,
+        };
+        let mut input_page = TestPageAllocator::new().expect("couldn't get test page");
+        input_page.copy_values(0, &[7, 8, 9]).unwrap();
+        let input_memory_buffer = MemoryBufferParameter {
+            bufferHandle: MemoryBufferAidl::Input(Some(
+                input_page.get_parcel_file_descriptor().expect("couldn't get fd"),
+            )),
+            sizeBytes: alloc_size as i32,
+        };
+        let mut cmd_list = Vec::<CryptoOperation>::new();
+        let mut cmd_processor = CmdProcessorContext::new();
+        cmd_list.push(CryptoOperation::SetMemoryBuffer(output_memory_buffer));
+        cmd_list.push(CryptoOperation::SetMemoryBuffer(input_memory_buffer));
+        let process_result = cmd_processor.process_all_steps(&mut cmd_list);
+        expect!(process_result.is_ok(), "Couldn't process command");
+        let mut read_slice_val = vec![55; 9];
+        let mem_buffer = cmd_processor.current_output_memory_buffer.as_ref().unwrap();
+        read_slice(&mem_buffer, &mut read_slice_val[..], 0).unwrap();
+        expect_eq!(&read_slice_val[..], &[0, 0, 0, 0, 0, 0, 0, 0, 0], "initial values were not 0");
+        let mut cmd_processor = CmdProcessorContext::new();
+        let output_reference =
+            MemoryBufferReference { startOffset: 0, sizeBytes: alloc_size as i32 };
+        cmd_list.push(CryptoOperation::DataOutput(OperationData::MemoryBufferReference(
+            output_reference,
+        )));
+        cmd_list.push(CryptoOperation::CopyData(OperationData::DataBuffer(vec![1, 2, 3])));
+        let process_result = cmd_processor.process_all_steps(&mut cmd_list);
+        expect!(process_result.is_ok(), "Couldn't process command");
+        let mem_buffer = cmd_processor.current_output_memory_buffer.as_ref().unwrap();
+        read_slice(&mem_buffer, &mut read_slice_val[..], 0).unwrap();
+        expect_eq!(&read_slice_val[..], &[1, 2, 3, 0, 0, 0, 0, 0, 0], "initial values were not 0");
+        cmd_list.push(CryptoOperation::CopyData(OperationData::DataBuffer(vec![4, 5, 6])));
+        let mut cmd_processor = CmdProcessorContext::new();
+        let process_result = cmd_processor.process_all_steps(&mut cmd_list);
+        expect!(process_result.is_ok(), "Couldn't process command");
+        let mem_buffer = cmd_processor.current_output_memory_buffer.as_ref().unwrap();
+        read_slice(&mem_buffer, &mut read_slice_val[..], 0).unwrap();
+        expect_eq!(&read_slice_val[..], &[1, 2, 3, 4, 5, 6, 0, 0, 0], "initial values were not 0");
+        let input_reference = MemoryBufferReference { startOffset: 0, sizeBytes: 3 };
+        cmd_list
+            .push(CryptoOperation::CopyData(OperationData::MemoryBufferReference(input_reference)));
+        let mut cmd_processor = CmdProcessorContext::new();
+        let process_result = cmd_processor.process_all_steps(&mut cmd_list);
+        expect!(process_result.is_ok(), "Couldn't process command");
+        cmd_list.clear();
+        let mem_buffer = cmd_processor.current_output_memory_buffer.as_ref().unwrap();
+        read_slice(&mem_buffer, &mut read_slice_val[..], 0).unwrap();
+        expect_eq!(&read_slice_val[..], &[1, 2, 3, 4, 5, 6, 7, 8, 9], "initial values were not 0");
+    }
+
+    #[test]
+    fn simple_copy_operation_on_initial_state() {
+        let mut cmd_list = Vec::<CryptoOperation>::new();
+        let mut cmd_processor = CmdProcessorContext::new();
+        let data_output = OperationData::DataBuffer(Vec::new());
+        cmd_list.push(CryptoOperation::CopyData(OperationData::DataBuffer(vec![1, 2, 3])));
+        let process_result = cmd_processor.process_all_steps(&mut cmd_list);
+        expect!(process_result.is_err(), "Shouldn't be able to copy before adding an output");
+        cmd_list.insert(0, CryptoOperation::DataOutput(data_output));
+        cmd_list.push(CryptoOperation::CopyData(OperationData::DataBuffer(vec![4, 5, 6])));
+        let process_result = cmd_processor.process_all_steps(&mut cmd_list);
+        expect!(process_result.is_ok(), "Couldn't process commands");
+        expect!(process_result.is_ok(), "Couldn't process second copy command");
+        let CryptoOperation::DataOutput(OperationData::DataBuffer(output)) = &cmd_list[0] else {
+            unreachable!("should not happen beucase we created the cmd list on the test");
+        };
+        expect_eq!(output, &[1, 2, 3, 4, 5, 6], "values were not copied correctly");
+    }
+
+    #[test]
+    fn simple_copy_opeartion_on_initial_state_buffer_reference_input() {
+        let mut cmd_list = Vec::<CryptoOperation>::new();
+        let mut cmd_processor = CmdProcessorContext::new();
+        let data_output = OperationData::DataBuffer(Vec::new());
+        cmd_list.push(CryptoOperation::DataOutput(data_output));
+        let mut input_page = TestPageAllocator::new().expect("couldn't create test page");
+        input_page.copy_values(0, &[2, 4, 8, 3, 6, 9]).unwrap();
+        let input_memory_buffer = MemoryBufferParameter {
+            bufferHandle: MemoryBufferAidl::Input(Some(
+                input_page.get_parcel_file_descriptor().expect("couldn't create fd"),
+            )),
+            sizeBytes: TestPageAllocator::get_allocation_size() as i32,
+        };
+        cmd_list.push(CryptoOperation::SetMemoryBuffer(input_memory_buffer));
+        let input_reference = MemoryBufferReference { startOffset: 0, sizeBytes: 3 as i32 };
+        cmd_list
+            .push(CryptoOperation::CopyData(OperationData::MemoryBufferReference(input_reference)));
+        let input_reference = MemoryBufferReference { startOffset: 3, sizeBytes: 3 as i32 };
+        //cmd_list
+        //    .push(CryptoOperation::CopyData(OperationData::MemoryBufferReference(input_reference)));
+        let process_result = cmd_processor.process_all_steps(&mut cmd_list);
+        expect!(process_result.is_ok(), "Couldn't process command");
+        let CryptoOperation::DataOutput(OperationData::DataBuffer(output)) = &cmd_list[0] else {
+            unreachable!("should not happen beucase we created the cmd list on the test");
+        };
+        expect_eq!(output, &[2, 4, 8], "values were not copied correctly");
+        let mut cmd_processor = CmdProcessorContext::new();
+        cmd_list[2] =
+            CryptoOperation::CopyData(OperationData::MemoryBufferReference(input_reference));
+        let process_result = cmd_processor.process_all_steps(&mut cmd_list);
+        expect!(process_result.is_ok(), "Couldn't process second copy command");
+        let CryptoOperation::DataOutput(OperationData::DataBuffer(output)) = &cmd_list[0] else {
+            unreachable!("should not happen beucase we created the cmd list on the test");
+        };
+        expect_eq!(output, &[2, 4, 8, 3, 6, 9], "values were not copied correctly");
     }
 }
