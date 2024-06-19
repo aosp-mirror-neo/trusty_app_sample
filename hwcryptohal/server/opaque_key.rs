@@ -177,6 +177,25 @@ impl OpaqueKey {
         Ok(opaque_keybinder)
     }
 
+    fn check_clear_import_policy(policy: &KeyPolicy) -> Result<(), HwCryptoError> {
+        if policy.keyLifetime != KeyLifetime::PORTABLE {
+            return Err(hwcrypto_err!(
+                BAD_PARAMETER,
+                "imported clear keys should have a PORTABLE lifetime"
+            ));
+        }
+        Ok(())
+    }
+
+    pub(crate) fn import_key_material(
+        policy: &KeyPolicy,
+        key_material: KeyMaterial,
+    ) -> binder::Result<binder::Strong<dyn IOpaqueKey>> {
+        check_key_material_with_policy(&key_material, policy)?;
+        Self::check_clear_import_policy(policy)?;
+        Self::new_binder(policy, key_material)
+    }
+
     #[allow(unused)]
     pub(crate) fn generate_opaque_key(
         policy: &KeyPolicy,
