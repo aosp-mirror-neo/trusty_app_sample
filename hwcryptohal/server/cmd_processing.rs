@@ -92,6 +92,7 @@ const INPUT_MEMORY_BUFFER_FLAGS: u32 = trusty_sys::MMAP_FLAG_PROT_READ;
 ///         This context cannot be used anymore
 /// `InitialState` -> `Destroyed`: `DestroyContext`
 ///         This context cannot be used anymore
+#[derive(Debug, PartialEq)]
 enum CmdProcessorState {
     InitialState,
     RunningOperation,
@@ -252,9 +253,19 @@ fn get_limits(
     }
 }
 
-// TODO: This type is still a WIP.
+// Wrapper over pointer used to map memory buffer.
+struct MappedBuffer(NonNull<u8>);
+
+// SAFETY: `MappedBuffer` is only used to free object on drop or to create a `VolatileSlice` when
+//         we need to access the underlying memory buffer; never directly. It is safe to access and
+//         drop on a different thread. All accesses to the mmaped memory are done through the
+//         `VolatileSlice` which already has the assumption that the underlying memory is shared
+//         between different entities, so it only uses `std::ptr::{copy, read_volatile,
+//         write_volatile}` to access memory.
+unsafe impl Send for MappedBuffer {}
+
 struct MemoryBuffer {
-    buffer_ptr: NonNull<u8>,
+    buffer_ptr: MappedBuffer,
     total_size: usize,
 }
 
@@ -296,7 +307,7 @@ impl MemoryBuffer {
         // cast is correct because buffer_size is an u32
         let total_size = buffer_size as usize;
 
-        Ok(Self { buffer_ptr, total_size })
+        Ok(Self { buffer_ptr: MappedBuffer(buffer_ptr), total_size })
     }
 
     fn get_memory_slice<'a>(&'a mut self) -> Result<VolatileSlice<'a>, HwCryptoError> {
@@ -305,7 +316,7 @@ impl MemoryBuffer {
         //         through the VolatileSlice methods, so accesses are volatile accesses. Memory is
         //         only unmapped on drop, so it will available for the lifetime of the
         //         `VolatileSlice`.
-        let mem_buffer = unsafe { VolatileSlice::new(self.buffer_ptr.as_ptr(), self.total_size) };
+        let mem_buffer = unsafe { VolatileSlice::new(self.buffer_ptr.0.as_ptr(), self.total_size) };
         Ok(mem_buffer)
     }
 
@@ -324,22 +335,33 @@ impl Drop for MemoryBuffer {
         // SAFETY: `buffer_ptr` and `total_size` were set up and remain unchanged for the lifetime
         //         of the object. `buffer_ptr` is still mapped at this point
         unsafe {
-            trusty_sys::munmap(self.buffer_ptr.as_ptr().cast::<c_void>(), self.total_size as u32)
+            trusty_sys::munmap(self.buffer_ptr.0.as_ptr().cast::<c_void>(), self.total_size as u32)
         };
     }
 }
 
 // `CmdProcessorContext` is the type in charge of executing a set of commands.
-struct CmdProcessorContext {
+pub(crate) struct CmdProcessorContext {
     current_input_memory_buffer: Option<MemoryBuffer>,
     current_output_memory_buffer: Option<MemoryBuffer>,
     current_state: CmdProcessorState,
     current_crypto_operation: Option<Box<dyn ICryptographicOperation>>,
 }
 
+impl std::fmt::Debug for CmdProcessorContext {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "CmdProcessorContext {{ input buffer set: {}, output buffer set: {}, state: {:?} }}",
+            self.current_input_memory_buffer.is_some(),
+            self.current_output_memory_buffer.is_some(),
+            self.current_state
+        )
+    }
+}
+
 impl CmdProcessorContext {
-    #[allow(dead_code)]
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             current_input_memory_buffer: None,
             current_output_memory_buffer: None,
@@ -579,6 +601,10 @@ impl CmdProcessorContext {
         Ok(())
     }
 
+    pub(crate) fn is_destroyed(&self) -> bool {
+        self.current_state == CmdProcessorState::Destroyed
+    }
+
     fn set_operation_parameters_step(
         &mut self,
         crypto_operation_parameters: &OperationParameters,
@@ -589,8 +615,7 @@ impl CmdProcessorContext {
         Ok(())
     }
 
-    #[allow(dead_code)]
-    fn process_all_steps(
+    pub(crate) fn process_all_steps(
         &mut self,
         operations: &mut [CryptoOperation],
     ) -> Result<(), HwCryptoError> {
@@ -814,7 +839,7 @@ mod tests {
         //         is only unmapped on drop, so it will available for the lifetime of the
         //         `VolatileSlice`.
         let mem_buffer = unsafe {
-            VolatileSlice::new(memory_buffer.buffer_ptr.as_ptr(), memory_buffer.total_size)
+            VolatileSlice::new(memory_buffer.buffer_ptr.0.as_ptr(), memory_buffer.total_size)
         };
         mem_buffer.read_slice(buf, start).map_err(HwCryptoError::from)
     }
