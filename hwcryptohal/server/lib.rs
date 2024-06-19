@@ -23,6 +23,8 @@
 pub mod hwcrypto_ipc_server;
 
 mod cmd_processing;
+mod crypto_operation;
+mod crypto_operation_context;
 mod crypto_provider;
 mod ffi_bindings;
 mod helpers;
