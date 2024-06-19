@@ -28,7 +28,7 @@ use trusty_std::alloc::{FallibleVec, Vec};
 
 #[start]
 fn start(_argc: isize, _argv: *const *const u8) -> isize {
-    <Vec<u8> as FallibleVec<u8>>::try_with_capacity(128).unwrap();
+    Vec::<u8>::try_with_capacity(128).unwrap();
 
     let message = b"Hello from no_std Rust!\n";
     unsafe {

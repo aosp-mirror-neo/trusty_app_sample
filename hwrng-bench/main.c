@@ -103,14 +103,10 @@ static void get_formatted_value_cb(char* buf,
     }
 }
 
-static uint64_t crypto_pmu_evt_arr[] = {PMU_EV_BR_MIS_PRED,
-                                        PMU_EV_INST_RETIRED};
-
 /*
  * Executed before each atomic execution of a BENCH(crypto, ...) Macro.
  */
 BENCH_SETUP(crypto) {
-    BENCH_INIT_PMU(crypto_pmu_evt_arr);
     /*
      * Let Framework know how to print param column header. Default is the
      * current param index. Will be reset to NULL after BENCH_TEARDOWN(crypto,
@@ -173,14 +169,6 @@ BENCH_RESULT(crypto, hwrng_hw_rand, time_micro_seconds) {
     return bench_get_duration_ns();
 }
 
-BENCH_RESULT(crypto, hwrng_hw_rand, cycle_counter) {
-    return bench_get_pmu_cnt(1);
-}
-
-BENCH_RESULT(crypto, hwrng_hw_rand, inst_retired) {
-    return bench_get_pmu_cnt(2);
-}
-
 BENCH_RESULT(crypto, hwrng_hw_rand, micro_sec_per_byte) {
     return bench_get_duration_ns() / BUF_SIZE;
 }
@@ -218,14 +206,6 @@ BENCH_RESULT(crypto, hwrng_fixed_total, time_micro_seconds) {
 
 BENCH_RESULT(crypto, hwrng_fixed_total, micro_sec_per_byte) {
     return bench_get_duration_ns() / BUF_SIZE;
-}
-
-BENCH_RESULT(crypto, hwrng_fixed_total, cycle_counter) {
-    return bench_get_pmu_cnt(1);
-}
-
-BENCH_RESULT(crypto, hwrng_fixed_total, inst_retired) {
-    return bench_get_pmu_cnt(2);
 }
 
 /*
