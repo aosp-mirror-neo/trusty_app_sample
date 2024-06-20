@@ -24,11 +24,14 @@ use android_hardware_security_see::aidl::android::hardware::security::see::hwcry
     MemoryBufferParameter::{
         MemoryBuffer::MemoryBuffer as MemoryBufferAidl, MemoryBufferParameter,
     },
+    OperationParameters::OperationParameters,
 };
 use core::ffi::c_void;
 use hwcryptohal_common::{err::HwCryptoError, hwcrypto_err};
 use std::{os::fd::AsRawFd, ptr::NonNull};
 use vm_memory::{volatile_memory::VolatileSlice, Bytes, VolatileMemory};
+
+use crate::crypto_operation::{CopyOperation, CryptographicOperation, ICryptographicOperation};
 
 const OUTPUT_MEMORY_BUFFER_FLAGS: u32 =
     trusty_sys::MMAP_FLAG_PROT_READ | trusty_sys::MMAP_FLAG_PROT_WRITE;
@@ -89,6 +92,7 @@ const INPUT_MEMORY_BUFFER_FLAGS: u32 = trusty_sys::MMAP_FLAG_PROT_READ;
 ///         This context cannot be used anymore
 /// `InitialState` -> `Destroyed`: `DestroyContext`
 ///         This context cannot be used anymore
+#[derive(Debug, PartialEq)]
 enum CmdProcessorState {
     InitialState,
     RunningOperation,
@@ -100,13 +104,19 @@ enum CmdProcessorState {
 pub(crate) enum DataToProcess<'a> {
     VolatileSlice(VolatileSlice<'a>),
     Slice(&'a mut [u8]),
+    Vector(Vec<u8>),
 }
 
 impl<'a> DataToProcess<'a> {
+    pub(crate) fn new_from_vector(slice: Vec<u8>) -> Self {
+        DataToProcess::Vector(slice)
+    }
+
     pub(crate) fn len(&self) -> usize {
         match self {
             Self::VolatileSlice(vs) => vs.len(),
             Self::Slice(s) => s.len(),
+            Self::Vector(v) => v.len(),
         }
     }
 
@@ -122,13 +132,23 @@ impl<'a> DataToProcess<'a> {
                 slice.len()
             ));
         }
+
         match (slice, self) {
             (Self::Slice(from), Self::VolatileSlice(to)) => to.write_slice(from, 0)?,
             (Self::VolatileSlice(from), Self::VolatileSlice(to)) => {
                 from.copy_to_volatile_slice(to.get_slice(0, to.len())?)
             }
+            (Self::Vector(from), Self::VolatileSlice(to)) => to.write_slice(from.as_slice(), 0)?,
             (Self::Slice(from), Self::Slice(to)) => to[0..from.len()].copy_from_slice(from),
             (Self::VolatileSlice(from), Self::Slice(to)) => from.read_slice(to, 0)?,
+            (Self::Vector(from), Self::Slice(to)) => {
+                to[0..from.len()].copy_from_slice(from.as_slice())
+            }
+            (Self::Slice(from), Self::Vector(to)) => to[0..from.len()].copy_from_slice(from),
+            (Self::VolatileSlice(from), Self::Vector(to)) => from.read_slice(to, 0)?,
+            (Self::Vector(from), Self::Vector(to)) => {
+                to[0..from.len()].copy_from_slice(from.as_slice())
+            }
         }
         Ok(())
     }
@@ -184,7 +204,6 @@ impl From<&mut MemoryBufferReference> for MemoryBufferSlice {
 // Operation which contains the `MemoryBufferReference`. This wrapper preserves that information to
 // be used along function call sequences.
 enum MemoryBufferReferenceWithType {
-    #[allow(dead_code)]
     Input(MemoryBufferSlice),
     Output(MemoryBufferSlice),
 }
@@ -234,9 +253,19 @@ fn get_limits(
     }
 }
 
-// TODO: This type is still a WIP.
+// Wrapper over pointer used to map memory buffer.
+struct MappedBuffer(NonNull<u8>);
+
+// SAFETY: `MappedBuffer` is only used to free object on drop or to create a `VolatileSlice` when
+//         we need to access the underlying memory buffer; never directly. It is safe to access and
+//         drop on a different thread. All accesses to the mmaped memory are done through the
+//         `VolatileSlice` which already has the assumption that the underlying memory is shared
+//         between different entities, so it only uses `std::ptr::{copy, read_volatile,
+//         write_volatile}` to access memory.
+unsafe impl Send for MappedBuffer {}
+
 struct MemoryBuffer {
-    buffer_ptr: NonNull<u8>,
+    buffer_ptr: MappedBuffer,
     total_size: usize,
 }
 
@@ -278,7 +307,7 @@ impl MemoryBuffer {
         // cast is correct because buffer_size is an u32
         let total_size = buffer_size as usize;
 
-        Ok(Self { buffer_ptr, total_size })
+        Ok(Self { buffer_ptr: MappedBuffer(buffer_ptr), total_size })
     }
 
     fn get_memory_slice<'a>(&'a mut self) -> Result<VolatileSlice<'a>, HwCryptoError> {
@@ -287,7 +316,7 @@ impl MemoryBuffer {
         //         through the VolatileSlice methods, so accesses are volatile accesses. Memory is
         //         only unmapped on drop, so it will available for the lifetime of the
         //         `VolatileSlice`.
-        let mem_buffer = unsafe { VolatileSlice::new(self.buffer_ptr.as_ptr(), self.total_size) };
+        let mem_buffer = unsafe { VolatileSlice::new(self.buffer_ptr.0.as_ptr(), self.total_size) };
         Ok(mem_buffer)
     }
 
@@ -306,25 +335,38 @@ impl Drop for MemoryBuffer {
         // SAFETY: `buffer_ptr` and `total_size` were set up and remain unchanged for the lifetime
         //         of the object. `buffer_ptr` is still mapped at this point
         unsafe {
-            trusty_sys::munmap(self.buffer_ptr.as_ptr().cast::<c_void>(), self.total_size as u32)
+            trusty_sys::munmap(self.buffer_ptr.0.as_ptr().cast::<c_void>(), self.total_size as u32)
         };
     }
 }
 
 // `CmdProcessorContext` is the type in charge of executing a set of commands.
-struct CmdProcessorContext {
+pub(crate) struct CmdProcessorContext {
     current_input_memory_buffer: Option<MemoryBuffer>,
     current_output_memory_buffer: Option<MemoryBuffer>,
     current_state: CmdProcessorState,
+    current_crypto_operation: Option<Box<dyn ICryptographicOperation>>,
+}
+
+impl std::fmt::Debug for CmdProcessorContext {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "CmdProcessorContext {{ input buffer set: {}, output buffer set: {}, state: {:?} }}",
+            self.current_input_memory_buffer.is_some(),
+            self.current_output_memory_buffer.is_some(),
+            self.current_state
+        )
+    }
 }
 
 impl CmdProcessorContext {
-    #[allow(dead_code)]
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             current_input_memory_buffer: None,
             current_output_memory_buffer: None,
             current_state: CmdProcessorState::InitialState,
+            current_crypto_operation: None,
         }
     }
 
@@ -427,10 +469,29 @@ impl CmdProcessorContext {
         }
     }
 
-    fn copy_step(
+    fn finish_step(
         &mut self,
-        copy_parameters: &mut OperationData,
         current_output_ref: &mut Option<OutputData>,
+    ) -> Result<(), HwCryptoError> {
+        self.operation_step(None, current_output_ref, true, None)?;
+        self.current_crypto_operation = None;
+        Ok(())
+    }
+
+    fn input_step(
+        &mut self,
+        input_parameters: &mut OperationData,
+        current_output_ref: &mut Option<OutputData>,
+    ) -> Result<(), HwCryptoError> {
+        self.operation_step(Some(input_parameters), current_output_ref, false, None)
+    }
+
+    fn operation_step(
+        &mut self,
+        input_parameters: Option<&mut OperationData>,
+        current_output_ref: &mut Option<OutputData>,
+        is_finish: bool,
+        operation_impl: Option<&mut dyn ICryptographicOperation>,
     ) -> Result<(), HwCryptoError> {
         // Doing this check here to keep the borrow checker happy because the next step borrows self
         // mutably. This is because even though it is an input, if it is a buffer reference, the
@@ -441,8 +502,8 @@ impl CmdProcessorContext {
             ))?;
         }
         // Creating a `DataToProcess` variable to abstract away where the input is located
-        let input = match copy_parameters {
-            OperationData::MemoryBufferReference(buffer_reference) => {
+        let input = match input_parameters {
+            Some(OperationData::MemoryBufferReference(buffer_reference)) => Some({
                 let buffer_reference =
                     MemoryBufferReferenceWithType::Input(buffer_reference.into());
                 self.check_memory_reference_in_range(&buffer_reference)?;
@@ -451,13 +512,27 @@ impl CmdProcessorContext {
                     .as_mut()
                     .ok_or(hwcrypto_err!(BAD_PARAMETER, "input buffer not set yet"))?
                     .get_subslice_as_data_to_process(input_start, input_size)?
-            }
-            OperationData::DataBuffer(input) => DataToProcess::Slice(&mut input[..]),
+            }),
+            Some(OperationData::DataBuffer(input)) => Some(DataToProcess::Slice(&mut input[..])),
+            None => None,
         };
-        if input.len() == 0 {
-            return Err(hwcrypto_err!(BAD_PARAMETER, "received an input of size 0"));
+        if let Some(ref input) = input {
+            if input.len() == 0 {
+                return Err(hwcrypto_err!(BAD_PARAMETER, "received an input of size 0"));
+            }
         }
-        let req_output_size = input.len();
+        let crypto_operation: &mut dyn ICryptographicOperation =
+            operation_impl.ok_or(()).or_else(|_| {
+                let crypto_operation = self
+                    .current_crypto_operation
+                    .as_mut()
+                    .ok_or(hwcrypto_err!(BAD_PARAMETER, "crypto operation has not been set yet"))?;
+                if !crypto_operation.is_active() {
+                    return Err(hwcrypto_err!(BAD_PARAMETER, "operation is not active"));
+                }
+                Ok(&mut **crypto_operation)
+            })?;
+        let req_output_size = crypto_operation.get_operation_req_size(input.as_ref(), is_finish)?;
 
         // Getting a reference to the output for the copy operation
         match current_output_ref
@@ -465,11 +540,13 @@ impl CmdProcessorContext {
             .ok_or(hwcrypto_err!(BAD_PARAMETER, "no output buffer available"))?
         {
             OutputData::DataBuffer(output_vec) => {
-                // We are copying into a vector, as long as we can resize the vector we can fit
+                // We are saving data into a vector, as long as we can resize the vector we can fit
                 // the result
-                let mut output_buff =
+                let original_size = output_vec.len();
+                let output_buff =
                     DataToProcess::allocate_buffer_end_vector(*output_vec, req_output_size)?;
-                output_buff.copy_from_slice(&input)?;
+                let added_bytes = crypto_operation.operation(input, output_buff, is_finish)?;
+                output_vec.truncate(original_size + added_bytes);
             }
             OutputData::MemoryReference(output_buff_ref, remaining_size) => {
                 if req_output_size > *remaining_size {
@@ -487,17 +564,29 @@ impl CmdProcessorContext {
                 // _output_start                output_start_offset                    output_stop
                 //
                 let output_start_offset = output_stop - *remaining_size;
-                let mut output_slice = self
+                let output_slice = self
                     .current_output_memory_buffer
                     .as_mut()
                     .ok_or(hwcrypto_err!(BAD_PARAMETER, "output buffer not set yet"))?
                     .get_subslice_as_data_to_process(output_start_offset, req_output_size)?;
-
-                output_slice.copy_from_slice(&input)?;
+                let req_output_size = crypto_operation.operation(input, output_slice, is_finish)?;
                 *remaining_size = *remaining_size - req_output_size;
             }
         }
         Ok(())
+    }
+
+    fn copy_step(
+        &mut self,
+        copy_parameters: &mut OperationData,
+        current_output_ref: &mut Option<OutputData>,
+    ) -> Result<(), HwCryptoError> {
+        self.operation_step(
+            Some(copy_parameters),
+            current_output_ref,
+            false,
+            Some(&mut CopyOperation),
+        )
     }
 
     fn destroy_step(
@@ -506,13 +595,27 @@ impl CmdProcessorContext {
     ) -> Result<(), HwCryptoError> {
         self.current_input_memory_buffer = None;
         self.current_output_memory_buffer = None;
+        self.current_crypto_operation = None;
         *current_output_ref = None;
         self.current_state = CmdProcessorState::Destroyed;
         Ok(())
     }
 
-    #[allow(dead_code)]
-    fn process_all_steps(
+    pub(crate) fn is_destroyed(&self) -> bool {
+        self.current_state == CmdProcessorState::Destroyed
+    }
+
+    fn set_operation_parameters_step(
+        &mut self,
+        crypto_operation_parameters: &OperationParameters,
+        _current_output_ref: &mut Option<OutputData>,
+    ) -> Result<(), HwCryptoError> {
+        let crypto_operation = CryptographicOperation::new_binder(crypto_operation_parameters)?;
+        self.current_crypto_operation = Some(crypto_operation);
+        Ok(())
+    }
+
+    pub(crate) fn process_all_steps(
         &mut self,
         operations: &mut [CryptoOperation],
     ) -> Result<(), HwCryptoError> {
@@ -533,11 +636,9 @@ impl CmdProcessorContext {
                     CryptoOperation::SetMemoryBuffer(step_data) => {
                         self.set_memory_buffer_step(&step_data, &mut curr_output)?
                     }
-                    CryptoOperation::SetOperationParameters(_step_data) => {
+                    CryptoOperation::SetOperationParameters(step_data) => {
                         self.current_state = CmdProcessorState::RunningOperation;
-                        unimplemented!(
-                            "SetOperationParameters from InitialState not implemented yet"
-                        )
+                        self.set_operation_parameters_step(&step_data, &mut curr_output)?;
                     }
                     CryptoOperation::SetPattern(_) => {
                         return Err(hwcrypto_err!(
@@ -574,13 +675,13 @@ impl CmdProcessorContext {
                     CryptoOperation::DestroyContext(_) => self.destroy_step(&mut curr_output)?,
                     CryptoOperation::Finish(_step_data) => {
                         self.current_state = CmdProcessorState::InitialState;
-                        unimplemented!("Finish not implemented yet")
+                        self.finish_step(&mut curr_output)?;
                     }
                     CryptoOperation::SetPattern(_) => {
                         unimplemented!("SetPattern not implemented yet")
                     }
-                    CryptoOperation::DataInput(_) => {
-                        unimplemented!("DataInput not implemented yet")
+                    CryptoOperation::DataInput(step_data) => {
+                        self.input_step(step_data, &mut curr_output)?;
                     }
                     CryptoOperation::AadInput(_) => unimplemented!("AadInput not implemented yet"),
                     CryptoOperation::SetOperationParameters(_step) => unimplemented!(
@@ -738,7 +839,7 @@ mod tests {
         //         is only unmapped on drop, so it will available for the lifetime of the
         //         `VolatileSlice`.
         let mem_buffer = unsafe {
-            VolatileSlice::new(memory_buffer.buffer_ptr.as_ptr(), memory_buffer.total_size)
+            VolatileSlice::new(memory_buffer.buffer_ptr.0.as_ptr(), memory_buffer.total_size)
         };
         mem_buffer.read_slice(buf, start).map_err(HwCryptoError::from)
     }
@@ -1108,7 +1209,7 @@ mod tests {
         let mut read_slice_val = vec![55; 9];
         let mem_buffer = cmd_processor.current_output_memory_buffer.as_ref().unwrap();
         read_slice(&mem_buffer, &mut read_slice_val[..], 0).unwrap();
-        expect_eq!(&read_slice_val[..], &[0, 0, 0, 0, 0, 0, 0, 0, 0], "initial values were not 0");
+        expect_eq!(&read_slice_val[..], &[0, 0, 0, 0, 0, 0, 0, 0, 0], "initial values where not 0");
         let mut cmd_processor = CmdProcessorContext::new();
         let output_reference =
             MemoryBufferReference { startOffset: 0, sizeBytes: alloc_size as i32 };
@@ -1120,14 +1221,14 @@ mod tests {
         expect!(process_result.is_ok(), "Couldn't process command");
         let mem_buffer = cmd_processor.current_output_memory_buffer.as_ref().unwrap();
         read_slice(&mem_buffer, &mut read_slice_val[..], 0).unwrap();
-        expect_eq!(&read_slice_val[..], &[1, 2, 3, 0, 0, 0, 0, 0, 0], "initial values were not 0");
+        expect_eq!(&read_slice_val[..], &[1, 2, 3, 0, 0, 0, 0, 0, 0], "initial values where not 0");
         cmd_list.push(CryptoOperation::CopyData(OperationData::DataBuffer(vec![4, 5, 6])));
         let mut cmd_processor = CmdProcessorContext::new();
         let process_result = cmd_processor.process_all_steps(&mut cmd_list);
         expect!(process_result.is_ok(), "Couldn't process command");
         let mem_buffer = cmd_processor.current_output_memory_buffer.as_ref().unwrap();
         read_slice(&mem_buffer, &mut read_slice_val[..], 0).unwrap();
-        expect_eq!(&read_slice_val[..], &[1, 2, 3, 4, 5, 6, 0, 0, 0], "initial values were not 0");
+        expect_eq!(&read_slice_val[..], &[1, 2, 3, 4, 5, 6, 0, 0, 0], "initial values where not 0");
         let input_reference = MemoryBufferReference { startOffset: 0, sizeBytes: 3 };
         cmd_list
             .push(CryptoOperation::CopyData(OperationData::MemoryBufferReference(input_reference)));
@@ -1137,7 +1238,7 @@ mod tests {
         cmd_list.clear();
         let mem_buffer = cmd_processor.current_output_memory_buffer.as_ref().unwrap();
         read_slice(&mem_buffer, &mut read_slice_val[..], 0).unwrap();
-        expect_eq!(&read_slice_val[..], &[1, 2, 3, 4, 5, 6, 7, 8, 9], "initial values were not 0");
+        expect_eq!(&read_slice_val[..], &[1, 2, 3, 4, 5, 6, 7, 8, 9], "initial values where not 0");
     }
 
     #[test]
@@ -1195,5 +1296,68 @@ mod tests {
             unreachable!("should not happen beucase we created the cmd list on the test");
         };
         expect_eq!(output, &[2, 4, 8, 3, 6, 9], "values were not copied correctly");
+    }
+
+    #[test]
+    fn aes_simple_test() {
+        let usage = KeyUse::ENCRYPT_DECRYPT;
+        let key_type = KeyType::AES_256_CBC_PKCS7_PADDING;
+        let policy = KeyPolicy {
+            usage,
+            keyLifetime: KeyLifetime::EPHEMERAL,
+            keyPermissions: Vec::new(),
+            keyType: key_type,
+            keyManagementKey: false,
+        };
+        let key = OpaqueKey::generate_opaque_key(&policy).expect("couldn't generate key");
+        let nonce = [0u8; 16];
+        let parameters = SymmetricCryptoParameters::Aes(AesCipherMode::Cbc(CipherModeParameters {
+            nonce: nonce.into(),
+        }));
+        let direction = SymmetricOperation::ENCRYPT;
+        let sym_op_params =
+            SymmetricOperationParameters { key: Some(key.clone()), direction, parameters };
+        let op_params = OperationParameters::SymmetricCrypto(sym_op_params);
+        let mut cmd_list = Vec::<CryptoOperation>::new();
+        let mut cmd_processor = CmdProcessorContext::new();
+        let data_output = OperationData::DataBuffer(Vec::new());
+        cmd_list.push(CryptoOperation::DataOutput(data_output));
+        cmd_list.push(CryptoOperation::SetOperationParameters(op_params));
+        let input_data = OperationData::DataBuffer("string to be encrypted".as_bytes().to_vec());
+        cmd_list.push(CryptoOperation::DataInput(input_data));
+        cmd_list.push(CryptoOperation::Finish(None));
+        let process_result = cmd_processor.process_all_steps(&mut cmd_list);
+        expect!(process_result.is_ok(), "Couldn't process command");
+        let CryptoOperation::DataOutput(OperationData::DataBuffer(encrypted_data)) =
+            cmd_list.remove(0)
+        else {
+            panic!("not reachable, we created this object above on the test");
+        };
+
+        // Decrypting
+        let parameters = SymmetricCryptoParameters::Aes(AesCipherMode::Cbc(CipherModeParameters {
+            nonce: nonce.into(),
+        }));
+        let direction = SymmetricOperation::DECRYPT;
+        let sym_op_params =
+            SymmetricOperationParameters { key: Some(key.clone()), direction, parameters };
+        let op_params = OperationParameters::SymmetricCrypto(sym_op_params);
+        let mut cmd_list = Vec::<CryptoOperation>::new();
+        let mut cmd_processor = CmdProcessorContext::new();
+        let data_output = OperationData::DataBuffer(Vec::new());
+        cmd_list.push(CryptoOperation::DataOutput(data_output));
+        cmd_list.push(CryptoOperation::SetOperationParameters(op_params));
+        cmd_list.push(CryptoOperation::DataInput(OperationData::DataBuffer(encrypted_data)));
+        cmd_list.push(CryptoOperation::Finish(None));
+        let process_result = cmd_processor.process_all_steps(&mut cmd_list);
+        expect!(process_result.is_ok(), "Couldn't process command");
+        let CryptoOperation::DataOutput(OperationData::DataBuffer(decrypted_data)) =
+            cmd_list.remove(0)
+        else {
+            panic!("not reachable, we created this object above on the test");
+        };
+        let decrypted_msg =
+            String::from_utf8(decrypted_data).expect("couldn't decode received message");
+        expect_eq!(decrypted_msg, "string to be encrypted", "couldn't retrieve original message");
     }
 }
