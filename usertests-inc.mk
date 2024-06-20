@@ -35,6 +35,7 @@ TRUSTY_USER_TESTS += \
 	trusty/user/app/sample/rust_no_std \
 
 TRUSTY_RUST_USER_TESTS += \
+	trusty/user/app/sample/hwcryptohal/common \
 	trusty/user/app/sample/hwcryptohal/server \
 	trusty/user/app/sample/hwcryptokey-test \
 	trusty/user/app/sample/memref-test/rust \
