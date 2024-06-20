@@ -28,44 +28,6 @@ use kmr_common::crypto::{
 
 use crate::opaque_key::OpaqueKey;
 
-/// Macro to create enums that can easily be used as cose labels for serialization
-/// It expects the macro definition to have the following form:
-///
-/// cose_enum_gen! {
-///     enum CoseEnumName {
-///         CoseEnumField1 = value1,
-///         CoseEnumField2 = value2,
-///     }
-/// }
-#[macro_export]
-macro_rules! cose_enum_gen {
-    (enum $name:ident {$($field:ident = $field_val:literal),+ $(,)*}) => {
-        enum $name {
-            $($field = $field_val),+
-        }
-
-        impl TryFrom<i64> for $name {
-            type Error = hwcryptohal_common::err::HwCryptoError;
-
-            fn try_from(value: i64) -> Result<Self, Self::Error> {
-                match value {
-                    $(x if x == $name::$field as i64 => Ok($name::$field)),+,
-                    _ => Err(hwcrypto_err!(SERIALIZATION_ERROR, "unsupported COSE enum label val {}", value)),
-                }
-            }
-        }
-
-        impl TryFrom<ciborium::value::Integer> for $name {
-            type Error = coset::CoseError;
-
-            fn try_from(value: ciborium::value::Integer) -> Result<Self, Self::Error> {
-                let value: i64 = value.try_into()?;
-                Ok(value.try_into().map_err(|_| coset::CoseError::EncodeFailed)?)
-            }
-        }
-    }
-}
-
 pub(crate) fn aidl_explicit_key_to_rust_key_material(
     key_material: &ExplicitKeyMaterial,
 ) -> Result<KeyMaterial, HwCryptoError> {
