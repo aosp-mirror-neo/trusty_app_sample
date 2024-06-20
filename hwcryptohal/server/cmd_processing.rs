@@ -181,38 +181,21 @@ fn get_mmap_prot_flags(memory_buffer: &MemoryBufferAidl) -> u32 {
     }
 }
 
-// Type added to be able to use AIDL `MemoryBufferReference` type more conveniently
-struct MemoryBufferSlice {
-    start_offset: i32,
-    size_bytes: i32,
-}
-
-impl From<&MemoryBufferReference> for MemoryBufferSlice {
-    fn from(value: &MemoryBufferReference) -> Self {
-        MemoryBufferSlice { start_offset: value.startOffset, size_bytes: value.sizeBytes }
-    }
-}
-
-impl From<&mut MemoryBufferReference> for MemoryBufferSlice {
-    fn from(value: &mut MemoryBufferReference) -> Self {
-        MemoryBufferSlice { start_offset: value.startOffset, size_bytes: value.sizeBytes }
-    }
-}
-
-// `MemoryBufferSlice`/`MemoryBufferReference` types do not contain the necessary information to
+// `MemoryBufferReference` types do not contain the necessary information to
 // know if it should operate on an Input or Output buffer. That information is provided by the
 // Operation which contains the `MemoryBufferReference`. This wrapper preserves that information to
 // be used along function call sequences.
+#[derive(Copy, Clone)]
 enum MemoryBufferReferenceWithType {
-    Input(MemoryBufferSlice),
-    Output(MemoryBufferSlice),
+    Input(MemoryBufferReference),
+    Output(MemoryBufferReference),
 }
 
 impl MemoryBufferReferenceWithType {
     fn len(&self) -> Result<usize, HwCryptoError> {
         match self {
-            MemoryBufferReferenceWithType::Input(buff_ref) => buff_ref.size_bytes,
-            MemoryBufferReferenceWithType::Output(buff_ref) => buff_ref.size_bytes,
+            MemoryBufferReferenceWithType::Input(buff_ref) => buff_ref.sizeBytes,
+            MemoryBufferReferenceWithType::Output(buff_ref) => buff_ref.sizeBytes,
         }
         .try_into()
         .map_err(|e| {
@@ -222,8 +205,8 @@ impl MemoryBufferReferenceWithType {
 
     fn start_offset(&self) -> Result<usize, HwCryptoError> {
         match self {
-            MemoryBufferReferenceWithType::Input(buff_ref) => buff_ref.start_offset,
-            MemoryBufferReferenceWithType::Output(buff_ref) => buff_ref.start_offset,
+            MemoryBufferReferenceWithType::Input(buff_ref) => buff_ref.startOffset,
+            MemoryBufferReferenceWithType::Output(buff_ref) => buff_ref.startOffset,
         }
         .try_into()
         .map_err(|e| {
@@ -455,14 +438,10 @@ impl CmdProcessorContext {
         match output_parameters {
             OperationData::DataBuffer(buf) => Ok(OutputData::DataBuffer(buf)),
             OperationData::MemoryBufferReference(buffer_reference) => {
-                let buff_ref = MemoryBufferReference {
-                    startOffset: buffer_reference.startOffset,
-                    sizeBytes: buffer_reference.sizeBytes,
-                };
                 Ok(OutputData::MemoryReference(
-                    buff_ref,
+                    *buffer_reference,
                     self.get_data_buffer_size(&MemoryBufferReferenceWithType::Output(
-                        buffer_reference.into(),
+                        (*buffer_reference).into(),
                     ))?,
                 ))
             }
@@ -498,14 +477,14 @@ impl CmdProcessorContext {
         // available method could potentially be use to modify the underlying memory buffer.
         if let Some(OutputData::MemoryReference(buff_ref, _)) = current_output_ref.as_ref() {
             self.check_memory_reference_in_range(&MemoryBufferReferenceWithType::Output(
-                buff_ref.into(),
+                (*buff_ref).into(),
             ))?;
         }
         // Creating a `DataToProcess` variable to abstract away where the input is located
         let input = match input_parameters {
             Some(OperationData::MemoryBufferReference(buffer_reference)) => Some({
                 let buffer_reference =
-                    MemoryBufferReferenceWithType::Input(buffer_reference.into());
+                    MemoryBufferReferenceWithType::Input((*buffer_reference).into());
                 self.check_memory_reference_in_range(&buffer_reference)?;
                 let (input_start, _input_stop, input_size) = get_limits(&buffer_reference)?;
                 self.current_input_memory_buffer
@@ -553,7 +532,7 @@ impl CmdProcessorContext {
                     return Err(hwcrypto_err!(ALLOCATION_ERROR, "run out of space output buffer"));
                 }
                 let (_output_start, output_stop, _output_size) =
-                    get_limits(&MemoryBufferReferenceWithType::Output(output_buff_ref.into()))?;
+                    get_limits(&MemoryBufferReferenceWithType::Output((*output_buff_ref).into()))?;
                 // We are automatically filling up the output buffer with the received input, so
                 // the first available position will be equal to the end of the buffer minus the
                 // remaining space:
