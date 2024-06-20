@@ -17,7 +17,9 @@
 //! Implementation of the `IOpaqueKey` AIDL interface. It is used as a handle to key material
 
 use android_hardware_security_see::aidl::android::hardware::security::see::hwcrypto::types::{
-    KeyLifetime::KeyLifetime, KeyPermissions::KeyPermissions, KeyType::KeyType, KeyUse::KeyUse,
+    AesCipherMode::AesCipherMode, KeyLifetime::KeyLifetime, KeyPermissions::KeyPermissions,
+    KeyType::KeyType, KeyUse::KeyUse, SymmetricCryptoParameters::SymmetricCryptoParameters,
+    SymmetricOperation::SymmetricOperation,
 };
 use android_hardware_security_see::aidl::android::hardware::security::see::hwcrypto::{
     IOpaqueKey::{BnOpaqueKey, IOpaqueKey},
@@ -35,6 +37,7 @@ use kmr_wire::keymint::EcCurve;
 use std::sync::OnceLock;
 
 use crate::crypto_provider;
+use crate::helpers;
 
 /// Number of bytes of unique value used to check if a key was created on current HWCrypto boot.
 const UNIQUE_VALUE_SIZEOF: usize = 32;
@@ -84,7 +87,6 @@ fn get_boot_unique_value() -> Result<BootUniqueValue, HwCryptoError> {
 /// Header for a `ClearKey` which contains the key policy along with some data needed to manipulate
 /// the key.
 #[derive(Debug)]
-#[allow(dead_code)]
 pub(crate) struct KeyHeader {
     boot_unique_value: BootUniqueValue,
     expiration_time: Option<u64>,
@@ -138,7 +140,6 @@ impl KeyHeader {
 }
 
 /// `IOpaqueKey` implementation.
-#[allow(dead_code)]
 pub struct OpaqueKey {
     pub(crate) key_header: KeyHeader,
     pub(crate) key_material: KeyMaterial,
@@ -176,6 +177,32 @@ impl OpaqueKey {
         Ok(opaque_keybinder)
     }
 
+    fn check_clear_import_policy(policy: &KeyPolicy) -> Result<(), HwCryptoError> {
+        if policy.keyLifetime != KeyLifetime::PORTABLE {
+            return Err(hwcrypto_err!(
+                BAD_PARAMETER,
+                "imported clear keys should have a PORTABLE lifetime"
+            ));
+        }
+        Ok(())
+    }
+
+    pub(crate) fn import_key_material(
+        policy: &KeyPolicy,
+        key_material: KeyMaterial,
+    ) -> binder::Result<binder::Strong<dyn IOpaqueKey>> {
+        check_key_material_with_policy(&key_material, policy)?;
+        Self::check_clear_import_policy(policy)?;
+        Self::new_binder(policy, key_material)
+    }
+
+    #[allow(unused)]
+    pub(crate) fn generate_opaque_key(
+        policy: &KeyPolicy,
+    ) -> binder::Result<binder::Strong<dyn IOpaqueKey>> {
+        let key_material = generate_key_material(&policy.keyType, None)?;
+        OpaqueKey::new_binder(policy, key_material)
+    }
     fn try_clone(&self) -> Result<Self, HwCryptoError> {
         let key_header = self.key_header.try_clone()?;
         let key_material = self.key_material.clone();
@@ -281,6 +308,49 @@ impl OpaqueKey {
             return Err(hwcrypto_err!(BAD_PARAMETER, "key was not exclusively a derive key"));
         }
         Ok(())
+    }
+
+    pub(crate) fn key_usage_supported(&self, usage: KeyUse) -> bool {
+        (usage.0 & self.key_header.key_usage.0) == usage.0
+    }
+
+    pub fn get_key_type(&self) -> KeyType {
+        self.key_header.key_type
+    }
+
+    /// Checks if the requested operation (encrypt/decrypt) can be done with this key
+    pub(crate) fn symmetric_operation_is_compatible(
+        &self,
+        direction: SymmetricOperation,
+    ) -> Result<(), HwCryptoError> {
+        let dir = helpers::direction_to_key_usage(&direction)?;
+        if !self.key_usage_supported(dir) {
+            Err(hwcrypto_err!(BAD_PARAMETER, "provided key do not support {:?}", dir))
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Checks if the requested algorithm parameters are compatible with this key
+    pub(crate) fn parameters_are_compatible_symmetric_cipher(
+        &self,
+        parameters: &SymmetricCryptoParameters,
+    ) -> Result<(), HwCryptoError> {
+        match parameters {
+            SymmetricCryptoParameters::Aes(aes_parameters) => match aes_parameters {
+                AesCipherMode::Cbc(_) => match self.get_key_type() {
+                    KeyType::AES_128_CBC_NO_PADDING
+                    | KeyType::AES_128_CBC_PKCS7_PADDING
+                    | KeyType::AES_256_CBC_NO_PADDING
+                    | KeyType::AES_256_CBC_PKCS7_PADDING => Ok(()),
+                    _ => Err(hwcrypto_err!(BAD_PARAMETER, "provided incompatible AES key for CBC")),
+                },
+                AesCipherMode::Ctr(_) => match self.get_key_type() {
+                    KeyType::AES_128_CTR | KeyType::AES_256_CTR => Ok(()),
+                    _ => Err(hwcrypto_err!(BAD_PARAMETER, "provided incompatible AES key for CTR")),
+                },
+            },
+        }
     }
 }
 
