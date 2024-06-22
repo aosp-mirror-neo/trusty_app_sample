@@ -15,10 +15,11 @@
  */
 #pragma once
 
+#include <lib/tipc/tipc_srv.h>
 #include <lk/compiler.h>
 
 __BEGIN_CDECLS
 
-int hwrng_start_service(void);
+int hwrng_start_service(struct tipc_hset* hset);
 
 __END_CDECLS
