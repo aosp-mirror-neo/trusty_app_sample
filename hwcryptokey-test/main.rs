@@ -14,7 +14,9 @@
  * limitations under the License.
  */
 
+mod aes_vectors;
 mod versioned_keys_explicit;
+mod versioned_keys_opaque;
 
 #[cfg(test)]
 mod tests {
