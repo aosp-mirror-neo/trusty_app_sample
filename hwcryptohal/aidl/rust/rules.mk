@@ -43,7 +43,9 @@ MODULE_AIDLS := \
     $(HWCRYPTO_AIDL_DIR)/$(MODULE_AIDL_PACKAGE)/PatternParameters.aidl                      \
     $(HWCRYPTO_AIDL_DIR)/$(MODULE_AIDL_PACKAGE)/types/AesCipherMode.aidl                    \
     $(HWCRYPTO_AIDL_DIR)/$(MODULE_AIDL_PACKAGE)/types/AesGcmMode.aidl                       \
+    $(HWCRYPTO_AIDL_DIR)/$(MODULE_AIDL_PACKAGE)/types/AesKey.aidl                           \
     $(HWCRYPTO_AIDL_DIR)/$(MODULE_AIDL_PACKAGE)/types/CipherModeParameters.aidl             \
+    $(HWCRYPTO_AIDL_DIR)/$(MODULE_AIDL_PACKAGE)/types/ExplicitKeyMaterial.aidl              \
     $(HWCRYPTO_AIDL_DIR)/$(MODULE_AIDL_PACKAGE)/types/HalErrorCode.aidl                     \
     $(HWCRYPTO_AIDL_DIR)/$(MODULE_AIDL_PACKAGE)/types/KeyLifetime.aidl                      \
     $(HWCRYPTO_AIDL_DIR)/$(MODULE_AIDL_PACKAGE)/types/KeyPermissions.aidl                   \
