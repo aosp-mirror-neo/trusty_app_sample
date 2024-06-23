@@ -73,3 +73,143 @@ impl IHwCryptoOperations for HwCryptoOperations {
         Ok(results)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::hwcrypto_ipc_server::RUST_SERVICE_PORT;
+    use android_hardware_security_see::aidl::android::hardware::security::see::hwcrypto::{
+        types::{
+            AesCipherMode::AesCipherMode, CipherModeParameters::CipherModeParameters,
+            KeyLifetime::KeyLifetime, KeyType::KeyType, KeyUse::KeyUse,
+            OperationData::OperationData, SymmetricCryptoParameters::SymmetricCryptoParameters,
+            SymmetricOperation::SymmetricOperation,
+            SymmetricOperationParameters::SymmetricOperationParameters,
+        },
+        CryptoOperation::CryptoOperation,
+        IHwCryptoKey::{
+            DerivedKey::DerivedKey, DerivedKeyParameters::DerivedKeyParameters,
+            DerivedKeyPolicy::DerivedKeyPolicy, DeviceKeyId::DeviceKeyId,
+            DiceBoundDerivationKey::DiceBoundDerivationKey,
+            DiceCurrentBoundKeyResult::DiceCurrentBoundKeyResult, IHwCryptoKey,
+        },
+        KeyPolicy::KeyPolicy,
+        OperationParameters::OperationParameters,
+    };
+    use binder::Strong;
+    use rpcbinder::RpcSession;
+    use test::{assert_ok, expect, expect_eq};
+
+    #[test]
+    fn aes_simple_test_from_binder() {
+        let hw_device_key: Strong<dyn IHwCryptoKey> =
+            RpcSession::new().setup_trusty_client(RUST_SERVICE_PORT).expect("Failed to connect");
+        let derivation_key = DiceBoundDerivationKey::KeyId(DeviceKeyId::DEVICE_BOUND_KEY);
+        let key_and_policy =
+            assert_ok!(hw_device_key.deriveCurrentDicePolicyBoundKey(&derivation_key));
+        let DiceCurrentBoundKeyResult { diceBoundKey: key, dicePolicyForKeyVersion: policy } =
+            key_and_policy;
+        expect!(key.is_some(), "should have received a key");
+        expect!(policy.len() > 0, "should have received a DICE policy");
+
+        let hw_crypto = hw_device_key.getHwCryptoOperations().expect("Failed to get crypto ops.");
+        let usage = KeyUse::ENCRYPT_DECRYPT;
+        let key_type = KeyType::AES_256_CBC_PKCS7_PADDING;
+        let policy = KeyPolicy {
+            usage,
+            keyLifetime: KeyLifetime::HARDWARE,
+            keyPermissions: Vec::new(),
+            keyType: key_type,
+            keyManagementKey: false,
+        };
+
+        let cbor_policy = hwcryptohal_common::policy::cbor_serialize_key_policy(&policy)
+            .expect("couldn't serialize policy");
+        let key_policy = DerivedKeyPolicy::OpaqueKey(cbor_policy);
+        let params = DerivedKeyParameters {
+            derivationKey: key,
+            keyPolicy: key_policy,
+            context: "context".as_bytes().to_vec(),
+        };
+        let derived_key = assert_ok!(hw_device_key.deriveKey(&params));
+        let key = match derived_key {
+            DerivedKey::Opaque(key) => key.expect("key shouldn't be NULL"),
+            DerivedKey::ExplicitKey(_) => panic!("wrong type of key received"),
+        };
+
+        let nonce = [0u8; 16];
+        let parameters = SymmetricCryptoParameters::Aes(AesCipherMode::Cbc(CipherModeParameters {
+            nonce: nonce.into(),
+        }));
+        let direction = SymmetricOperation::ENCRYPT;
+        let sym_op_params =
+            SymmetricOperationParameters { key: Some(key.clone()), direction, parameters };
+        let op_params = OperationParameters::SymmetricCrypto(sym_op_params);
+        let mut cmd_list = Vec::<CryptoOperation>::new();
+        let data_output = OperationData::DataBuffer(Vec::new());
+        cmd_list.push(CryptoOperation::DataOutput(data_output));
+        cmd_list.push(CryptoOperation::SetOperationParameters(op_params));
+        let input_data = OperationData::DataBuffer("string to be encrypted".as_bytes().to_vec());
+        cmd_list.push(CryptoOperation::DataInput(input_data));
+        let crypto_op_set = CryptoOperationSet { context: None, operations: cmd_list };
+        let mut crypto_sets = Vec::new();
+        crypto_sets.push(crypto_op_set);
+        let mut additional_error_info =
+            CryptoOperationErrorAdditionalInfo { failingCommandIndex: 0 };
+        let mut op_result = hw_crypto
+            .processCommandList(&mut crypto_sets, &mut additional_error_info)
+            .expect("couldn't process commands");
+        // Extracting the vector from the command list because of ownership
+        let CryptoOperation::DataOutput(OperationData::DataBuffer(encrypted_data)) =
+            crypto_sets.remove(0).operations.remove(0)
+        else {
+            panic!("not reachable, we created this object above on the test");
+        };
+        let context = op_result.remove(0).context;
+        // Separating the finish call on a different command set to test the returned context
+        let mut cmd_list = Vec::<CryptoOperation>::new();
+        let data_output = OperationData::DataBuffer(encrypted_data);
+        cmd_list.push(CryptoOperation::DataOutput(data_output));
+        cmd_list.push(CryptoOperation::Finish(None));
+        let crypto_op_set = CryptoOperationSet { context, operations: cmd_list };
+        let mut crypto_sets = Vec::new();
+        crypto_sets.push(crypto_op_set);
+        hw_crypto
+            .processCommandList(&mut crypto_sets, &mut additional_error_info)
+            .expect("couldn't process commands");
+        let CryptoOperation::DataOutput(OperationData::DataBuffer(encrypted_data)) =
+            crypto_sets.remove(0).operations.remove(0)
+        else {
+            panic!("not reachable, we created this object above on the test");
+        };
+
+        //// Decrypting
+        let parameters = SymmetricCryptoParameters::Aes(AesCipherMode::Cbc(CipherModeParameters {
+            nonce: nonce.into(),
+        }));
+        let direction = SymmetricOperation::DECRYPT;
+        let sym_op_params = SymmetricOperationParameters { key: Some(key), direction, parameters };
+        let op_params = OperationParameters::SymmetricCrypto(sym_op_params);
+        let mut cmd_list = Vec::<CryptoOperation>::new();
+        let data_output = OperationData::DataBuffer(Vec::new());
+        cmd_list.push(CryptoOperation::DataOutput(data_output));
+        cmd_list.push(CryptoOperation::SetOperationParameters(op_params));
+        cmd_list.push(CryptoOperation::DataInput(OperationData::DataBuffer(encrypted_data)));
+        cmd_list.push(CryptoOperation::Finish(None));
+        let crypto_op_set = CryptoOperationSet { context: None, operations: cmd_list };
+        let mut crypto_sets = Vec::new();
+        crypto_sets.push(crypto_op_set);
+        hw_crypto
+            .processCommandList(&mut crypto_sets, &mut additional_error_info)
+            .expect("couldn't process commands");
+        // Extracting the vector from the command list because of ownership
+        let CryptoOperation::DataOutput(OperationData::DataBuffer(decrypted_data)) =
+            crypto_sets.remove(0).operations.remove(0)
+        else {
+            panic!("not reachable, we created this object above on the test");
+        };
+        let decrypted_msg =
+            String::from_utf8(decrypted_data).expect("couldn't decode received message");
+        expect_eq!(decrypted_msg, "string to be encrypted", "couldn't retrieve original message");
+    }
+}

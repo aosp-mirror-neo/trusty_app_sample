@@ -241,7 +241,7 @@ fn get_new_key_derivation_context() -> [u8; KEY_DERIVATION_CTX_LENGTH] {
     key_ctx
 }
 
-fn parse_cborium_bytes_to_fixed_array(
+pub(crate) fn parse_cborium_bytes_to_fixed_array(
     value: &ciborium::value::Value,
     name: &str,
 ) -> Result<[u8; KEY_DERIVATION_CTX_LENGTH], HwCryptoError> {
