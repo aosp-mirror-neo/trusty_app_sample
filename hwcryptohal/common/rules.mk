@@ -22,11 +22,16 @@ MODULE_SRCS += \
 
 MODULE_CRATE_NAME := hwcryptohal_common
 
+MANIFEST := $(LOCAL_DIR)/manifest.json
+
 MODULE_LIBRARY_DEPS += \
 	trusty/user/app/sample/hwcryptohal/aidl/rust  \
 	trusty/user/base/lib/keymint-rust/common \
 	trusty/user/base/lib/tipc/rust \
 	trusty/user/base/lib/trusty-sys \
 	$(call FIND_CRATE,log) \
+	$(call FIND_CRATE,vm-memory) \
+
+MODULE_RUST_TESTS := true
 
 include make/library.mk
