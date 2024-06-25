@@ -27,8 +27,14 @@ use android_hardware_security_see::aidl::android::hardware::security::see::hwcry
 };
 use android_hardware_security_see::binder;
 use binder::binder_impl::Binder;
+use ciborium::Value;
 use core::fmt;
-use hwcryptohal_common::{err::HwCryptoError, hwcrypto_err};
+use coset::CborSerializable;
+use hwcryptohal_common::{
+    err::HwCryptoError,
+    hwcrypto_err,
+    policy::{self, KeyLifetimeSerializable, KeyTypeSerializable, KeyUseSerializable},
+};
 use kmr_common::{
     crypto::{self, Aes, CurveType, Hkdf, Hmac, KeyMaterial, OpaqueOr, Rng},
     explicit, FallibleAllocExt,
@@ -84,30 +90,87 @@ fn get_boot_unique_value() -> Result<BootUniqueValue, HwCryptoError> {
     Ok(boot_unique_value.clone())
 }
 
+#[derive(Copy, Clone)]
+pub(crate) enum HkdfOperationType {
+    DiceBoundDerivation = 1,
+    ClearKeyDerivation = 3,
+    OpaqueKeyDerivation = 4,
+}
+
+pub(crate) struct DerivationContext {
+    context_components: Vec<Value>,
+}
+
+impl DerivationContext {
+    pub(crate) fn new(op_type: HkdfOperationType) -> Result<Self, HwCryptoError> {
+        let mut context_components = Vec::new();
+        context_components.try_reserve(1)?;
+        context_components.push(Value::Integer((op_type as u8).into()));
+        Ok(Self { context_components })
+    }
+
+    pub(crate) fn add_binary_string(&mut self, binary_string: &[u8]) -> Result<(), HwCryptoError> {
+        self.context_components.try_reserve(1)?;
+        let mut context = Vec::new();
+        context.try_reserve(binary_string.len())?;
+        context.extend_from_slice(binary_string);
+        self.context_components.push(Value::Bytes(context));
+        Ok(())
+    }
+
+    pub(crate) fn add_owned_binary_string(
+        &mut self,
+        binary_string: Vec<u8>,
+    ) -> Result<(), HwCryptoError> {
+        self.context_components.try_reserve(1)?;
+        self.context_components.push(Value::Bytes(binary_string));
+        Ok(())
+    }
+
+    pub(crate) fn add_unsigned_integer(&mut self, value: u64) -> Result<(), HwCryptoError> {
+        self.context_components.try_reserve(1)?;
+        self.context_components.push(Value::Integer(value.into()));
+        Ok(())
+    }
+
+    pub(crate) fn create_key_derivation_context(self) -> Result<Vec<u8>, HwCryptoError> {
+        let context = Value::Array(self.context_components);
+        Ok(context.to_vec()?)
+    }
+}
+
 /// Header for a `ClearKey` which contains the key policy along with some data needed to manipulate
 /// the key.
 #[derive(Debug)]
 pub(crate) struct KeyHeader {
     boot_unique_value: BootUniqueValue,
     expiration_time: Option<u64>,
-    key_lifetime: KeyLifetime,
+    key_lifetime: KeyLifetimeSerializable,
     key_permissions: Vec<KeyPermissions>,
-    key_usage: KeyUse,
-    key_type: KeyType,
+    key_usage: KeyUseSerializable,
+    key_type: KeyTypeSerializable,
     management_key: bool,
 }
 
 impl KeyHeader {
     fn new(policy: &KeyPolicy) -> Result<Self, HwCryptoError> {
+        let boot_unique_value = BootUniqueValue::new()?;
+        Self::new_with_boot_value(policy, boot_unique_value)
+    }
+
+    fn new_with_boot_value(
+        policy: &KeyPolicy,
+        boot_unique_value: BootUniqueValue,
+    ) -> Result<Self, HwCryptoError> {
         let mut key_permissions = Vec::new();
         key_permissions.try_extend_from_slice(&policy.keyPermissions[..])?;
         Ok(Self {
-            boot_unique_value: BootUniqueValue::new()?,
+            boot_unique_value,
             expiration_time: None,
-            key_lifetime: policy.keyLifetime,
+            key_lifetime: KeyLifetimeSerializable(policy.keyLifetime),
             key_permissions,
-            key_usage: policy.usage,
-            key_type: policy.keyType,
+            key_usage: KeyUseSerializable(policy.usage),
+            key_type: KeyTypeSerializable(policy.keyType),
             management_key: policy.keyManagementKey,
         })
     }
@@ -116,10 +179,10 @@ impl KeyHeader {
         let mut key_permissions = Vec::new();
         key_permissions.try_extend_from_slice(&self.key_permissions[..])?;
         Ok(KeyPolicy {
-            usage: self.key_usage,
-            keyLifetime: self.key_lifetime,
+            usage: self.key_usage.0,
+            keyLifetime: self.key_lifetime.0,
             keyPermissions: key_permissions,
-            keyType: self.key_type,
+            keyType: self.key_type.0,
             keyManagementKey: self.management_key,
         })
     }
@@ -235,11 +298,16 @@ impl OpaqueKey {
         self.key_can_be_used_for_derivation()
     }
 
-    pub(crate) fn derive_raw_key_material(
+    // All key derivation functions that uses an `OpaqueKey` as key material should use this
+    // function. If the key derivation do not fit one of the current use cases defined in
+    // `HkdfOperationType`, a new enum value should be added to `HkdfOperationType` for the use
+    // case.
+    fn derive_raw_key_material(
         &self,
-        context: &[u8],
+        context: DerivationContext,
         derived_key_size: usize,
     ) -> Result<Vec<u8>, HwCryptoError> {
+        let context_with_op_type = context.create_key_derivation_context()?;
         match &self.key_material {
             KeyMaterial::Hmac(key) => {
                 let hkdf = crypto_provider::HmacImpl;
@@ -247,7 +315,7 @@ impl OpaqueKey {
                     hwcrypto_err!(BAD_PARAMETER, "only explicit HMAC keys supported")
                 })?;
                 let raw_key = hkdf
-                    .hkdf(&[], &explicit_key.0, context, derived_key_size)
+                    .hkdf(&[], &explicit_key.0, context_with_op_type.as_slice(), derived_key_size)
                     .map_err(|e| hwcrypto_err!(GENERIC_ERROR, "couldn't derive key {:?}", e))?;
                 Ok(raw_key)
             }
@@ -255,24 +323,39 @@ impl OpaqueKey {
         }
     }
 
-    pub(crate) fn derive_key(
+    pub(crate) fn derive_clear_key_material(
         &self,
-        policy: &KeyPolicy,
+        context: &[u8],
+        derived_key_size: usize,
+    ) -> Result<Vec<u8>, HwCryptoError> {
+        let mut op_context = DerivationContext::new(HkdfOperationType::ClearKeyDerivation)?;
+        op_context.add_unsigned_integer(derived_key_size as u64)?;
+        op_context.add_binary_string(context)?;
+        self.derive_raw_key_material(op_context, derived_key_size)
+    }
+
+    pub(crate) fn derive_opaque_key(
+        &self,
+        policy: &[u8],
         context: &[u8],
     ) -> binder::Result<binder::Strong<dyn IOpaqueKey>> {
-        self.check_key_derivation_parameters(policy)?;
-        let derived_key_size = get_key_size_in_bytes(&policy.keyType)?;
-        let raw_key_material = self.derive_raw_key_material(context, derived_key_size)?;
-        Self::new_opaque_key_from_raw_bytes(policy, raw_key_material)
+        let aidl_policy = policy::cbor_policy_to_aidl(policy)?;
+        self.check_key_derivation_parameters(&aidl_policy)?;
+        let derived_key_size = get_key_size_in_bytes(&aidl_policy.keyType)?;
+        let mut op_context = DerivationContext::new(HkdfOperationType::OpaqueKeyDerivation)?;
+        op_context.add_binary_string(policy)?;
+        op_context.add_binary_string(context)?;
+        let raw_key_material = self.derive_raw_key_material(op_context, derived_key_size)?;
+        Self::new_opaque_key_from_raw_bytes(&aidl_policy, raw_key_material)
     }
 
     fn derivation_allowed_lifetime(
         &self,
         derived_key_lifetime: KeyLifetime,
     ) -> Result<bool, HwCryptoError> {
-        validate_lifetime(self.key_header.key_lifetime)?;
+        validate_lifetime(self.key_header.key_lifetime.0)?;
         validate_lifetime(derived_key_lifetime)?;
-        match self.key_header.key_lifetime {
+        match self.key_header.key_lifetime.0 {
             //ephemeral keys can be used to derive/wrap any other key
             KeyLifetime::EPHEMERAL => Ok(true),
             KeyLifetime::HARDWARE => {
@@ -304,18 +387,18 @@ impl OpaqueKey {
             KeyMaterial::Hmac(_) => Ok(()),
             _ => Err(hwcrypto_err!(UNSUPPORTED, "Only HMAC keys can be used for key derivation")),
         }?;
-        if self.key_header.key_usage != KeyUse::DERIVE {
+        if self.key_header.key_usage.0 != KeyUse::DERIVE {
             return Err(hwcrypto_err!(BAD_PARAMETER, "key was not exclusively a derive key"));
         }
         Ok(())
     }
 
     pub(crate) fn key_usage_supported(&self, usage: KeyUse) -> bool {
-        (usage.0 & self.key_header.key_usage.0) == usage.0
+        (usage.0 & self.key_header.key_usage.0 .0) == usage.0
     }
 
     pub fn get_key_type(&self) -> KeyType {
-        self.key_header.key_type
+        self.key_header.key_type.0
     }
 
     /// Checks if the requested operation (encrypt/decrypt) can be done with this key
@@ -476,8 +559,8 @@ pub(crate) fn check_key_material_with_policy(
     }
 }
 
-// Get key size in bytesgiven the backend AES key type. Used to check if we received enough bytes
-// from the caller for an AES key.
+// Get key size given the backend AES key type. Used to check if we received enough bytes from the
+// caller for an AES key.
 fn get_aes_variant_key_size(variant: &crypto::aes::Variant) -> usize {
     match variant {
         crypto::aes::Variant::Aes128 => 16,
