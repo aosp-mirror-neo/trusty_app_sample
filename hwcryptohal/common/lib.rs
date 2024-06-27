@@ -16,4 +16,14 @@
 
 //! Library implementing common client and server HWCrypto functionality.
 
+pub mod cose;
 pub mod err;
+pub mod policy;
+
+// Trusty Rust unittests use a sligthly different setup and environment than
+// normal Rust unittests. The next call adds the necessary variables and code to be
+// able to compile this library as a Trusty unittest TA.
+#[cfg(test)]
+mod tests {
+    test::init!();
+}

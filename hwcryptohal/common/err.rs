@@ -22,6 +22,7 @@ use android_hardware_security_see::binder;
 use core::array::TryFromSliceError;
 use coset::CoseError;
 use tipc::TipcError;
+use vm_memory::VolatileMemoryError;
 
 /// Macro used to create a `HwCryptoError::HalError` by providing the AIDL `HalErrorCode` and a
 /// message: `hwcrypto_err!(UNSUPPORTED, "unsupported operation")`
@@ -46,6 +47,12 @@ pub enum HwCryptoError {
     KmError(kmr_common::Error),
     /// Error when (de)serializing CBOR objects
     CborError(kmr_wire::CborError),
+}
+
+impl HwCryptoError {
+    pub fn matches_hal_error_code(&self, error_code: i32) -> bool {
+        core::matches!(self, HwCryptoError::HalError { code, .. } if *code == error_code)
+    }
 }
 
 impl From<kmr_wire::CborError> for HwCryptoError {
@@ -75,6 +82,12 @@ impl From<CoseError> for HwCryptoError {
 impl From<TryReserveError> for HwCryptoError {
     fn from(e: TryReserveError) -> Self {
         hwcrypto_err!(ALLOCATION_ERROR, "error allocating: {}", e)
+    }
+}
+
+impl From<VolatileMemoryError> for HwCryptoError {
+    fn from(e: VolatileMemoryError) -> Self {
+        hwcrypto_err!(BAD_PARAMETER, "memory buffer slice error: {}", e)
     }
 }
 

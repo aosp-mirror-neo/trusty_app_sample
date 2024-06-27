@@ -16,6 +16,8 @@
 #pragma once
 
 #include <interface/hwkey/hwkey.h>
+#include <lib/tipc/tipc.h>
+#include <lib/tipc/tipc_srv.h>
 #include <lk/compiler.h>
 #include <stdbool.h>
 #include <sys/types.h>
@@ -136,13 +138,20 @@ uint32_t get_opaque_key(const uuid_t* uuid,
                         size_t kbuf_len,
                         size_t* klen);
 
-void hwkey_init_srv_provider(void);
+int hwkey_init_srv_provider(struct tipc_hset* hset);
 
 void hwkey_install_keys(const struct hwkey_keyslot* keys, unsigned int kcnt);
 
-int hwkey_start_service(void);
+int hwkey_chan_handle_msg(const struct tipc_port* _port,
+                          handle_t _chan,
+                          void* _received_ctx);
 
-bool hwkey_client_allowed(const uuid_t* uuid);
+int hwkey_chan_ctx_create(const struct tipc_port* port,
+                          handle_t chan,
+                          const struct uuid* peer,
+                          void** ctx);
+
+void hwkey_chan_ctx_close(void* ctx);
 
 uint32_t derive_key_v1(const uuid_t* uuid,
                        const uint8_t* ikm_data,
