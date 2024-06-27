@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include <lib/rng/trusty_rng.h>
 #include <lk/compiler.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -35,12 +36,14 @@ __BEGIN_CDECLS
 int hwrng_dev_init(void);
 
 /*
- * hwrng_dev_get_rng_data() - get hardware-generated random data
+ * trusty_rng_hw_rand() - get hardware-generated random data. Function
+ * definition located in trusty_rng.h.
  * @buf: buffer to be filled up
  * @buf_len: requested amount of random data
  *
  * Return: NO_ERROR on success, a negative error code otherwise.
+ *
+ * int trusty_rng_hw_rand(uint8_t* data, size_t len);
  */
-int hwrng_dev_get_rng_data(uint8_t* buf, size_t buf_len);
 
 __END_CDECLS
