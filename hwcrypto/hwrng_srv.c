@@ -27,26 +27,22 @@
 #include <hwcrypto/hwrng_dev.h>
 #include <interface/hwrng/hwrng.h>
 #include <lib/tipc/tipc.h>
+#include <lib/tipc/tipc_srv.h>
 #include <trusty_log.h>
 
 #define HWRNG_SRV_NAME HWRNG_PORT
 #define MAX_HWRNG_MSG_SIZE 4096
+
+/* 0 means unlimited number of connections */
+#define HWRNG_MAX_NUM_CHANNELS 0
 
 struct hwrng_chan_ctx {
     struct tipc_event_handler evt_handler;
     struct list_node node;
     handle_t chan;
     size_t req_size;
+    int error;
     bool send_blocked;
-};
-
-static void hwrng_port_handler(const uevent_t* ev, void* priv);
-static void hwrng_chan_handler(const uevent_t* ev, void* priv);
-
-static handle_t hwrng_port = INVALID_IPC_HANDLE;
-
-static struct tipc_event_handler hwrng_port_evt_handler = {
-        .proc = hwrng_port_handler,
 };
 
 static uint8_t rng_data[MAX_HWRNG_MSG_SIZE];
@@ -74,94 +70,84 @@ static void _hexdump8(const void* ptr, size_t len) {
 }
 
 /*
- * Close specified HWRNG service channel
- */
-static void hwrng_close_chan(struct hwrng_chan_ctx* ctx) {
-    close(ctx->chan);
-
-    if (list_in_list(&ctx->node))
-        list_delete(&ctx->node);
-
-    free(ctx);
-}
-
-/*
  * Handle HWRNG request queue
  */
-static bool hwrng_handle_req_queue(void) {
+static void hwrng_handle_req_queue(void) {
     int rc;
     struct hwrng_chan_ctx* ctx;
     struct hwrng_chan_ctx* temp;
 
-    /* service channels */
-    bool need_more = false;
-
     /* for all pending requests */
-    list_for_every_entry_safe(&hwrng_req_list, ctx, temp, struct hwrng_chan_ctx,
-                              node) {
-        if (ctx->send_blocked)
-            continue; /* cant service it rignt now */
-
-        size_t len = ctx->req_size;
-
-        if (len > MAX_HWRNG_MSG_SIZE)
-            len = MAX_HWRNG_MSG_SIZE;
-
-        /* get hwrng data */
-        rc = hwrng_dev_get_rng_data(rng_data, len);
-        if (rc != NO_ERROR) {
-            TLOGE("failed (%d) to get hwrng data\n", rc);
-            hwrng_close_chan(ctx);
-            continue;
-        }
-
-        /* send reply */
-        rc = tipc_send1(ctx->chan, rng_data, len);
-        if (rc < 0) {
-            if (rc == ERR_NOT_ENOUGH_BUFFER) {
-                /* mark it as send_blocked */
-                ctx->send_blocked = true;
-            } else {
-                /* just close HWRNG request channel */
-                TLOGE("failed (%d) to send_reply\n", rc);
-                hwrng_close_chan(ctx);
+    bool more_requests;
+    do {
+        more_requests = false;
+        list_for_every_entry_safe(&hwrng_req_list, ctx, temp,
+                                  struct hwrng_chan_ctx, node) {
+            if (ctx->error || ctx->send_blocked) {
+                continue; /* can't service it right now */
             }
-            continue;
+
+            size_t len = ctx->req_size;
+
+            if (len > MAX_HWRNG_MSG_SIZE)
+                len = MAX_HWRNG_MSG_SIZE;
+
+            /* get hwrng data */
+            rc = trusty_rng_hw_rand(rng_data, len);
+            if (rc != NO_ERROR) {
+                TLOGE("failed (%d) to get hwrng data\n", rc);
+                ctx->error = rc;
+                continue;
+            }
+
+            /* send reply */
+            rc = tipc_send1(ctx->chan, rng_data, len);
+            if (rc < 0) {
+                if (rc == ERR_NOT_ENOUGH_BUFFER) {
+                    /* mark it as send_blocked */
+                    ctx->send_blocked = true;
+                } else {
+                    /* just close HWRNG request channel */
+                    TLOGE("failed (%d) to send_reply\n", rc);
+                    ctx->error = rc;
+                }
+                continue;
+            }
+
+            ctx->req_size -= len;
+
+            if (ctx->req_size == 0) {
+                /* remove it from pending list */
+                list_delete(&ctx->node);
+            } else {
+                more_requests = true;
+            }
         }
-
-        ctx->req_size -= len;
-
-        if (ctx->req_size == 0) {
-            /* remove it from pending list */
-            list_delete(&ctx->node);
-        } else {
-            need_more = true;
-        }
-    }
-
-    return need_more;
-}
-
-/*
- * Check if we can handle request queue
- */
-static void hwrng_kick_req_queue(void) {
-    hwrng_handle_req_queue();
+    } while (more_requests);
 }
 
 /*
  *  Read and queue HWRNG request message
  */
-static int hwrng_chan_handle_msg(struct hwrng_chan_ctx* ctx) {
+static int hwrng_chan_handle_msg(const struct tipc_port* port,
+                                 handle_t chan,
+                                 void* received_ctx) {
     int rc;
     struct hwrng_req req;
 
+    struct hwrng_chan_ctx* ctx = (struct hwrng_chan_ctx*)received_ctx;
+
     assert(ctx);
 
+    /* check for an error from a previous send attempt */
+    if (ctx->error) {
+        return ctx->error;
+    }
+
     /* read request */
-    rc = tipc_recv1(ctx->chan, sizeof(req), &req, sizeof(req));
+    rc = tipc_recv1(chan, sizeof(req), &req, sizeof(req));
     if (rc < 0) {
-        TLOGE("failed (%d) to receive msg for chan %d\n", rc, ctx->chan);
+        TLOGE("failed (%d) to receive msg for chan %d\n", rc, chan);
         return rc;
     }
 
@@ -175,111 +161,93 @@ static int hwrng_chan_handle_msg(struct hwrng_chan_ctx* ctx) {
         list_add_tail(&hwrng_req_list, &ctx->node);
     }
 
-    return 0;
+    hwrng_handle_req_queue();
+
+    return ctx->error;
 }
 
 /*
- *  Channel handler where HWRNG requests are coming from
+ * Create hwrng channel context
  */
-static void hwrng_chan_handler(const uevent_t* ev, void* priv) {
-    struct hwrng_chan_ctx* ctx = priv;
+static int hwrng_chan_ctx_create(const struct tipc_port* port,
+                                 handle_t chan,
+                                 const struct uuid* peer,
+                                 void** ctx) {
+    struct hwrng_chan_ctx* chan_ctx = calloc(1, sizeof(*chan_ctx));
 
-    assert(ctx);
-    assert(ev->handle == ctx->chan);
-
-    tipc_handle_chan_errors(ev);
-
-    if (ev->event & IPC_HANDLE_POLL_HUP) {
-        hwrng_close_chan(ctx);
-    } else {
-        if (ev->event & IPC_HANDLE_POLL_SEND_UNBLOCKED) {
-            ctx->send_blocked = false;
-        }
-
-        if (ev->event & IPC_HANDLE_POLL_MSG) {
-            int rc = hwrng_chan_handle_msg(ctx);
-            if (rc) {
-                hwrng_close_chan(ctx);
-            }
-        }
+    if (!chan_ctx) {
+        return ERR_NO_MEMORY;
     }
 
-    /* kick state machine */
-    hwrng_kick_req_queue();
+    /* init channel state */
+    chan_ctx->chan = chan;
+    *ctx = chan_ctx;
+
+    return NO_ERROR;
 }
 
 /*
- * Port were HWRNG requests are coming from
+ * Close specified hwrng channel context
  */
-static void hwrng_port_handler(const uevent_t* ev, void* priv) {
-    uuid_t peer_uuid;
+static void hwrng_chan_ctx_close(void* ctx_rcv) {
+    struct hwrng_chan_ctx* ctx = (struct hwrng_chan_ctx*)ctx_rcv;
 
-    tipc_handle_port_errors(ev);
+    if (list_in_list(&ctx->node))
+        list_delete(&ctx->node);
 
-    if (ev->event & IPC_HANDLE_POLL_READY) {
-        handle_t chan;
+    close(ctx->chan);
+    free(ctx);
+}
 
-        /* incoming connection: accept it */
-        int rc = accept(ev->handle, &peer_uuid);
-        if (rc < 0) {
-            TLOGE("failed (%d) to accept on port %d\n", rc, ev->handle);
-            return;
-        }
-        chan = (handle_t)rc;
+static int hwrng_handle_send_unblocked(const struct tipc_port* port,
+                                       handle_t chan,
+                                       void* ctx_v) {
+    struct hwrng_chan_ctx* ctx = ctx_v;
 
-        /* allocate state */
-        struct hwrng_chan_ctx* ctx = calloc(1, sizeof(*ctx));
-        if (!ctx) {
-            TLOGE("failed to alloc state for chan %d\n", chan);
-            close(chan);
-            return;
-        }
-
-        /* init channel state */
-        ctx->evt_handler.priv = ctx;
-        ctx->evt_handler.proc = hwrng_chan_handler;
-        ctx->chan = chan;
-
-        /* attach channel handler */
-        rc = set_cookie(chan, &ctx->evt_handler);
-        if (rc) {
-            TLOGE("failed (%d) to set_cookie on chan %d\n", rc, chan);
-            free(ctx);
-            close(chan);
-            return;
-        }
+    if (ctx->error) {
+        return ctx->error;
     }
+
+    ctx->send_blocked = false;
+
+    hwrng_handle_req_queue();
+
+    return ctx->error;
 }
 
 /*
  *  Initialize HWRNG services
  */
-int hwrng_start_service(void) {
+int hwrng_start_service(struct tipc_hset* hset) {
     int rc;
 
     TLOGD("Start HWRNG service\n");
 
-    /* create HWRNG port */
-    rc = port_create(HWRNG_SRV_NAME, 1, MAX_HWRNG_MSG_SIZE,
-                     IPC_PORT_ALLOW_TA_CONNECT);
-    if (rc < 0) {
-        TLOGE("Failed (%d) to create port '%s'\n", rc, HWRNG_SRV_NAME);
-        goto err_port_create;
-    }
+    static struct tipc_port_acl acl = {
+            .flags = IPC_PORT_ALLOW_TA_CONNECT,
+            .uuid_num = 0,
+            .uuids = NULL,
+    };
 
-    hwrng_port = (handle_t)rc;
-    set_cookie(hwrng_port, &hwrng_port_evt_handler);
+    static struct tipc_port port = {
+            .name = HWRNG_SRV_NAME,
+            .msg_max_size = MAX_HWRNG_MSG_SIZE,
+            .msg_queue_len = 1,
+            .acl = &acl,
+    };
+
+    static struct tipc_srv_ops ops = {
+            .on_message = hwrng_chan_handle_msg,
+            .on_connect = hwrng_chan_ctx_create,
+            .on_channel_cleanup = hwrng_chan_ctx_close,
+            .on_send_unblocked = hwrng_handle_send_unblocked,
+    };
 
     rc = hwrng_dev_init();
     if (rc != NO_ERROR) {
         TLOGE("Failed (%d) to initialize HWRNG device\n", rc);
-        goto err_hwrng_dev_init;
+        return rc;
     }
 
-    return NO_ERROR;
-
-err_hwrng_dev_init:
-    close(hwrng_port);
-err_port_create:
-    return rc;
+    return tipc_add_service(hset, &port, 1, HWRNG_MAX_NUM_CHANNELS, &ops);
 }
