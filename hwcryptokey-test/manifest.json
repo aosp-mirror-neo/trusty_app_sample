@@ -1,6 +1,6 @@
 {
     "app_name": "hwcryptokey_test",
     "uuid": "1f365041-823e-4387-90ae-dad2f55f1d3e",
-    "min_heap": 118784,
+    "min_heap": 487424,
     "min_stack": 32768
 }
