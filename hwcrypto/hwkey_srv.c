@@ -65,13 +65,6 @@ struct opaque_handle_node {
  */
 static struct list_node opaque_handles = LIST_INITIAL_VALUE(opaque_handles);
 
-static void hwkey_port_handler(const uevent_t* ev, void* priv);
-static void hwkey_chan_handler(const uevent_t* ev, void* priv);
-
-static struct tipc_event_handler hwkey_port_evt_handler = {
-        .proc = hwkey_port_handler,
-};
-
 static uint8_t req_data[HWKEY_MAX_MSG_SIZE + 1];
 static __attribute__((aligned(4))) uint8_t key_data[HWKEY_MAX_MSG_SIZE];
 
@@ -507,10 +500,14 @@ send_response:
 /*
  *  Read and queue HWKEY request message
  */
-static int hwkey_chan_handle_msg(struct hwkey_chan_ctx* ctx) {
+int hwkey_chan_handle_msg(const struct tipc_port* port,
+                          handle_t chan,
+                          void* received_ctx) {
     int rc;
     size_t req_data_len;
     struct hwkey_msg_header* hdr;
+
+    struct hwkey_chan_ctx* ctx = (struct hwkey_chan_ctx*)received_ctx;
 
     rc = tipc_recv1(ctx->chan, sizeof(*hdr), req_data, sizeof(req_data) - 1);
     if (rc < 0) {
@@ -579,79 +576,6 @@ static int hwkey_chan_handle_msg(struct hwkey_chan_ctx* ctx) {
 }
 
 /*
- *  HWKEY service channel event handler
- */
-static void hwkey_chan_handler(const uevent_t* ev, void* priv) {
-    struct hwkey_chan_ctx* ctx = priv;
-
-    assert(ctx);
-    assert(ev->handle == ctx->chan);
-
-    tipc_handle_chan_errors(ev);
-
-    if (ev->event & IPC_HANDLE_POLL_HUP) {
-        /* closed by peer. */
-        hwkey_ctx_close(ctx);
-        return;
-    }
-
-    if (ev->event & IPC_HANDLE_POLL_MSG) {
-        int rc = hwkey_chan_handle_msg(ctx);
-        if (rc < 0) {
-            /* report an error and close channel */
-            TLOGE("failed (%d) to handle event on channel %d\n", rc,
-                  ev->handle);
-            hwkey_ctx_close(ctx);
-        }
-    }
-}
-
-/*
- * HWKEY service port event handler
- */
-static void hwkey_port_handler(const uevent_t* ev, void* priv) {
-    uuid_t peer_uuid;
-
-    tipc_handle_port_errors(ev);
-
-    if (ev->event & IPC_HANDLE_POLL_READY) {
-        /* incoming connection: accept it */
-        int rc = accept(ev->handle, &peer_uuid);
-        if (rc < 0) {
-            TLOGE("failed (%d) to accept on port %d\n", rc, ev->handle);
-            return;
-        }
-
-        handle_t chan = (handle_t)rc;
-        if (!hwkey_client_allowed(&peer_uuid)) {
-            TLOGE("access to hwkey service denied\n");
-            close(chan);
-            return;
-        }
-
-        struct hwkey_chan_ctx* ctx = calloc(1, sizeof(*ctx));
-        if (!ctx) {
-            TLOGE("failed (%d) to allocate context on chan %d\n", rc, chan);
-            close(chan);
-            return;
-        }
-
-        /* init channel state */
-        ctx->evt_handler.priv = ctx;
-        ctx->evt_handler.proc = hwkey_chan_handler;
-        ctx->chan = chan;
-        ctx->uuid = peer_uuid;
-
-        rc = set_cookie(chan, &ctx->evt_handler);
-        if (rc < 0) {
-            TLOGE("failed (%d) to set_cookie on chan %d\n", rc, chan);
-            hwkey_ctx_close(ctx);
-            return;
-        }
-    }
-}
-
-/*
  *  Install Key slot provider
  */
 void hwkey_install_keys(const struct hwkey_keyslot* keys, unsigned int kcnt) {
@@ -703,7 +627,7 @@ uint32_t get_key_handle(const struct hwkey_keyslot* slot,
      */
     uint8_t random_buf[HWKEY_OPAQUE_HANDLE_SIZE + 2];
     while (1) {
-        int rc = hwrng_dev_get_rng_data(random_buf, sizeof(random_buf));
+        int rc = trusty_rng_hw_rand(random_buf, sizeof(random_buf));
         if (rc != NO_ERROR) {
             /* Don't leave an empty entry if we couldn't generate a token */
             delete_opaque_handle(entry);
@@ -766,29 +690,36 @@ uint32_t get_opaque_key(const uuid_t* uuid,
 }
 
 /*
- *  Initialize HWKEY service
+ * Create hwkey channel context
  */
-int hwkey_start_service(void) {
-    int rc;
-    handle_t port;
+int hwkey_chan_ctx_create(const struct tipc_port* port,
+                          handle_t chan,
+                          const struct uuid* peer,
+                          void** ctx) {
+    struct hwkey_chan_ctx* chan_ctx = calloc(1, sizeof(*chan_ctx));
 
-    TLOGD("Start HWKEY service\n");
-
-    /* Initialize service */
-    rc = port_create(HWKEY_PORT, 1, HWKEY_MAX_MSG_SIZE,
-                     IPC_PORT_ALLOW_TA_CONNECT);
-    if (rc < 0) {
-        TLOGE("Failed (%d) to create port %s\n", rc, HWKEY_PORT);
-        return rc;
+    if (!chan_ctx) {
+        return ERR_NO_MEMORY;
     }
 
-    port = (handle_t)rc;
-    rc = set_cookie(port, &hwkey_port_evt_handler);
-    if (rc) {
-        TLOGE("failed (%d) to set_cookie on port %d\n", rc, port);
-        close(port);
-        return rc;
-    }
+    chan_ctx->uuid = *peer;
+    chan_ctx->chan = chan;
+    *ctx = chan_ctx;
 
     return NO_ERROR;
+}
+
+/*
+ * Close specified hwkey channel context
+ */
+void hwkey_chan_ctx_close(void* ctx) {
+    struct opaque_handle_node* entry;
+    struct opaque_handle_node* temp;
+    list_for_every_entry_safe(&opaque_handles, entry, temp,
+                              struct opaque_handle_node, node) {
+        if (entry->owner == ctx) {
+            delete_opaque_handle(entry);
+        }
+    }
+    free(ctx);
 }
