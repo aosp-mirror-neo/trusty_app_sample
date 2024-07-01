@@ -27,7 +27,7 @@
 #include <uapi/err.h>
 
 static uint32_t _hist[256];
-static uint8_t _rng_buf[1024];
+static uint8_t _rng_buf[16384];
 
 static void hwrng_update_hist(uint8_t* data, unsigned int cnt) {
     for (unsigned int i = 0; i < cnt; i++) {
@@ -58,13 +58,19 @@ TEST(hwrng, show_data_test) {
     }
 }
 
+TEST(hwrng, large_buffer) {
+    int rc;
+    rc = trusty_rng_hw_rand(_rng_buf, sizeof(_rng_buf));
+    EXPECT_EQ(NO_ERROR, rc, "hwrng test");
+}
+
 TEST(hwrng, var_rng_req_test) {
     int rc;
     unsigned int i;
     size_t req_cnt;
     /* Issue 100 hwrng requests of variable sizes */
     for (i = 0; i < 100; i++) {
-        req_cnt = ((size_t)rand() % sizeof(_rng_buf)) + 1;
+        req_cnt = ((size_t)rand() % MIN(1024, sizeof(_rng_buf))) + 1;
         rc = trusty_rng_hw_rand(_rng_buf, req_cnt);
         EXPECT_EQ(NO_ERROR, rc, "hwrng test");
         if (rc != NO_ERROR) {

@@ -16,10 +16,12 @@
 
 #pragma once
 
+#include <lib/tipc/tipc.h>
+#include <lib/tipc/tipc_srv.h>
 #include <lk/compiler.h>
 
 __BEGIN_CDECLS
 
-int keybox_start_service(void);
+int keybox_start_service(struct tipc_hset*);
 
 __END_CDECLS

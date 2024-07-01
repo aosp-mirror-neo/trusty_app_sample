@@ -16,5 +16,6 @@
 
 [
     porttest("com.android.trusty.rust.hwcryptohalserver.test"),
+    porttest("com.android.trusty.rust.hwcryptohal_common.test"),
     porttest("com.android.trusty.rust.hwcryptokey_test.test"),
 ]
