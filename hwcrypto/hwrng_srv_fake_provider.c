@@ -16,12 +16,14 @@
 
 #define TLOG_TAG "hwrng_fake_srv"
 
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <uapi/err.h>
 
 #include <hwcrypto/hwrng_dev.h>
+#include <trusty/time.h>
 #include <trusty_log.h>
 
 #pragma message "Compiling FAKE HWRNG provider"
@@ -36,8 +38,15 @@ static size_t counter = 1;
 
 __attribute__((no_sanitize("unsigned-integer-overflow"))) int
 trusty_rng_hw_rand(uint8_t* buf, size_t buf_len) {
+    int64_t time;
+    trusty_gettime(0, &time);
+
+    time = time ^ (time >> 32);
+    time = time ^ (time >> 16);
+    const uint8_t mask = (time ^ (time >> 8)) & 0xff;
+
     for (uint8_t* end = buf + buf_len; buf < end; ++buf) {
-        *buf = counter++ & 0xff;
+        *buf = (counter++ ^ mask) & 0xff;
     }
     return NO_ERROR;
 }
