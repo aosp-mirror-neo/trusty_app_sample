@@ -28,7 +28,9 @@ MODULE_LIBRARY_DEPS += \
 	frameworks/native/libs/binder/trusty/rust \
 	frameworks/native/libs/binder/trusty/rust/rpcbinder \
 	trusty/user/app/sample/hwcryptohal/aidl/rust  \
+	trusty/user/app/sample/hwcryptohal/common \
 	trusty/user/base/lib/trusty-std \
+	external/rust/crates/log \
 
 MODULE_RUST_TESTS := true
 
