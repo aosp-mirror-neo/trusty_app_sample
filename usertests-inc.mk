@@ -16,12 +16,12 @@
 include trusty/user/app/sample/stats-test/usertests-inc.mk
 
 TRUSTY_USER_TESTS += \
+	trusty/user/app/sample/hwcryptohal/server/app \
 	trusty/user/app/sample/app-mgmt-test/client\
 	trusty/user/app/sample/binder-test/client \
 	trusty/user/app/sample/binder-test/service \
 	trusty/user/app/sample/hwcrypto-unittest \
 	trusty/user/app/sample/hwrng-unittest \
-	trusty/user/app/sample/hwrng-bench \
 	trusty/user/app/sample/manifest-test \
 	trusty/user/app/sample/memref-test \
 	trusty/user/app/sample/memref-test/lender \
@@ -30,9 +30,18 @@ TRUSTY_USER_TESTS += \
 	trusty/user/app/sample/spi/swspi-srv \
 	trusty/user/app/sample/spi/swspi-test \
 	trusty/user/app/sample/skel_rust \
+	trusty/user/app/sample/skel2 \
 	trusty/user/app/sample/rust_no_std \
 
+ifneq (true,$(call TOBOOL,$(UNITTEST_COVERAGE_ENABLED)))
+TRUSTY_USER_TESTS += \
+	trusty/user/app/sample/hwrng-bench
+endif
+
 TRUSTY_RUST_USER_TESTS += \
+	trusty/user/app/sample/hwcryptohal/common \
+	trusty/user/app/sample/hwcryptohal/server \
+	trusty/user/app/sample/hwcryptokey-test \
 	trusty/user/app/sample/memref-test/rust \
 	trusty/user/app/sample/rust-hello-world \
 

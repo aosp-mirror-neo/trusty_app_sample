@@ -26,7 +26,6 @@ MODULE_INCLUDES := $(LOCAL_DIR)/include
 
 MODULE_SRCS := \
 	$(LOCAL_DIR)/main.c \
-	$(LOCAL_DIR)/hwrng_srv.c \
 	$(LOCAL_DIR)/hwkey_srv.c \
 
 ifeq (true,$(call TOBOOL,$(WITH_FAKE_HWRNG)))
@@ -35,6 +34,8 @@ endif
 
 ifeq (true,$(call TOBOOL,$(WITH_FAKE_HWKEY)))
 MODULE_SRCS += $(LOCAL_DIR)/hwkey_srv_fake_provider.c
+MODULE_SRCS += $(LOCAL_DIR)/hwrng_srv.c
+MODULE_DEFINES += WITH_HWCRYPTO_HWRNG=1
 endif
 
 MODULE_LIBRARY_DEPS := \
@@ -75,6 +76,7 @@ MODULE_COMPILEFLAGS += \
 endif
 
 ifeq (true,$(call TOBOOL,$(WITH_FAKE_KEYBOX)))
+MODULE_DEFINES += WITH_FAKE_KEYBOX
 include $(LOCAL_DIR)/keybox/rules.mk
 endif
 

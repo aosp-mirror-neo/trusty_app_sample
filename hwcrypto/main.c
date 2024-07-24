@@ -24,6 +24,7 @@
 
 #include <hwcrypto/hwrng_dev.h>
 #include <lib/tipc/tipc.h>
+#include <lk/err_ptr.h>
 #include <trusty_log.h>
 
 #include "hwkey_srv_priv.h"
@@ -32,75 +33,48 @@
 #include "keybox/srv.h"
 
 /*
- *  Dispatch event
- */
-static void dispatch_event(const uevent_t* ev) {
-    assert(ev);
-
-    if (ev->event == IPC_HANDLE_POLL_NONE) {
-        /* not really an event, do nothing */
-        TLOGI("got an empty event\n");
-        return;
-    }
-
-    /* check if we have handler */
-    struct tipc_event_handler* handler = ev->cookie;
-    if (handler && handler->proc) {
-        /* invoke it */
-        handler->proc(ev, handler->priv);
-        return;
-    }
-
-    /* no handler? close it */
-    TLOGE("no handler for event (0x%x) with handle %d\n", ev->event,
-          ev->handle);
-
-    close(ev->handle);
-
-    return;
-}
-
-/*
  *  Main application event loop
  */
 int main(void) {
     int rc;
-    uevent_t event;
+    struct tipc_hset* hset;
 
     TLOGD("Initializing\n");
 
+    hset = tipc_hset_create();
+    if (IS_ERR(hset)) {
+        rc = PTR_ERR(hset);
+        TLOGE("tipc_hset_create failed (%d)\n", rc);
+        goto out;
+    }
+
     /* initialize service providers */
-    rc = hwrng_start_service();
+#if WITH_HWCRYPTO_HWRNG
+    rc = hwrng_start_service(hset);
     if (rc != NO_ERROR) {
         TLOGE("Failed (%d) to initialize HWRNG service\n", rc);
         goto out;
     }
-    hwkey_init_srv_provider();
+#endif
 
-    rc = keybox_start_service();
+    rc = hwkey_init_srv_provider(hset);
+    if (rc != NO_ERROR) {
+        TLOGE("Failed (%d) to initialize HwKey service\n", rc);
+        goto out;
+    }
+
+#if defined(WITH_FAKE_KEYBOX)
+    rc = keybox_start_service(hset);
     if (rc != NO_ERROR) {
         TLOGE("Failed (%d) to initialize Keybox service\n", rc);
         goto out;
     }
+#endif
 
     TLOGD("enter main event loop\n");
 
     /* enter main event loop */
-    while (1) {
-        event.handle = INVALID_IPC_HANDLE;
-        event.event = 0;
-        event.cookie = NULL;
-
-        rc = wait_any(&event, INFINITE_TIME);
-        if (rc < 0) {
-            TLOGE("wait_any failed (%d)\n", rc);
-            break;
-        }
-
-        if (rc == NO_ERROR) { /* got an event */
-            dispatch_event(&event);
-        }
-    }
+    rc = tipc_run_event_loop(hset);
 
 out:
     return rc;
