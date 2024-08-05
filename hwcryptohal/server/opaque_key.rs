@@ -155,12 +155,8 @@ impl DerivationContext {
     }
 }
 
-/// Header for a `ClearKey` which contains the key policy along with some data needed to manipulate
-/// the key.
 #[derive(Debug)]
-pub(crate) struct KeyHeader {
-    boot_unique_value: BootUniqueValue,
-    expiration_time: Option<u64>,
+struct KeyHeaderPolicy {
     key_lifetime: KeyLifetimeSerializable,
     key_permissions: Vec<KeyPermissions>,
     key_usage: KeyUseSerializable,
@@ -168,21 +164,11 @@ pub(crate) struct KeyHeader {
     management_key: bool,
 }
 
-impl KeyHeader {
+impl KeyHeaderPolicy {
     fn new(policy: &KeyPolicy) -> Result<Self, HwCryptoError> {
-        let boot_unique_value = BootUniqueValue::new()?;
-        Self::new_with_boot_value(policy, boot_unique_value)
-    }
-
-    fn new_with_boot_value(
-        policy: &KeyPolicy,
-        boot_unique_value: BootUniqueValue,
-    ) -> Result<Self, HwCryptoError> {
         let mut key_permissions = Vec::new();
         key_permissions.try_extend_from_slice(&policy.keyPermissions[..])?;
         Ok(Self {
-            boot_unique_value,
-            expiration_time: None,
             key_lifetime: KeyLifetimeSerializable(policy.keyLifetime),
             key_permissions,
             key_usage: KeyUseSerializable(policy.usage),
@@ -207,14 +193,65 @@ impl KeyHeader {
         let mut key_permissions = Vec::new();
         key_permissions.try_extend_from_slice(&self.key_permissions[..])?;
         Ok(Self {
-            boot_unique_value: self.boot_unique_value.clone(),
-            expiration_time: self.expiration_time,
             key_lifetime: self.key_lifetime,
             key_permissions,
             key_usage: self.key_usage,
             key_type: self.key_type,
             management_key: self.management_key,
         })
+    }
+}
+
+#[allow(unused)]
+#[derive(Debug)]
+struct KeyHeaderMetadata {
+    expiration_time: Option<u64>,
+}
+
+impl KeyHeaderMetadata {
+    fn new() -> Self {
+        Self { expiration_time: None }
+    }
+
+    // While the current metadata definition wouldn't fail on this operation, we are doing this
+    // division to add an element to metadata that could fail while ying to clone
+    fn try_clone(&self) -> Result<Self, HwCryptoError> {
+        Ok(Self { expiration_time: None })
+    }
+}
+
+/// Header for a `ClearKey` which contains the key policy along with some data needed to manipulate
+/// the key.
+#[derive(Debug)]
+pub(crate) struct KeyHeader {
+    boot_unique_value: BootUniqueValue,
+    key_policy: KeyHeaderPolicy,
+    key_metadata: KeyHeaderMetadata,
+}
+
+impl KeyHeader {
+    fn new(policy: &KeyPolicy) -> Result<Self, HwCryptoError> {
+        let boot_unique_value = BootUniqueValue::new()?;
+        Self::new_with_boot_value(policy, boot_unique_value)
+    }
+
+    fn new_with_boot_value(
+        policy: &KeyPolicy,
+        boot_unique_value: BootUniqueValue,
+    ) -> Result<Self, HwCryptoError> {
+        let key_policy = KeyHeaderPolicy::new(policy)?;
+        let key_metadata = KeyHeaderMetadata::new();
+        Ok(Self { boot_unique_value, key_policy, key_metadata })
+    }
+
+    fn get_policy(&self) -> Result<KeyPolicy, HwCryptoError> {
+        self.key_policy.get_policy()
+    }
+
+    fn try_clone(&self) -> Result<Self, HwCryptoError> {
+        let key_policy = self.key_policy.try_clone()?;
+        let key_metadata = self.key_metadata.try_clone()?;
+        Ok(Self { boot_unique_value: self.boot_unique_value.clone(), key_policy, key_metadata })
     }
 }
 
@@ -571,9 +608,9 @@ impl OpaqueKey {
         &self,
         derived_key_lifetime: KeyLifetime,
     ) -> Result<bool, HwCryptoError> {
-        validate_lifetime(self.key_header.key_lifetime.0)?;
+        validate_lifetime(self.key_header.key_policy.key_lifetime.0)?;
         validate_lifetime(derived_key_lifetime)?;
-        match self.key_header.key_lifetime.0 {
+        match self.key_header.key_policy.key_lifetime.0 {
             //ephemeral keys can be used to derive/wrap any other key
             KeyLifetime::EPHEMERAL => Ok(true),
             KeyLifetime::HARDWARE => {
@@ -595,7 +632,7 @@ impl OpaqueKey {
             _ => Err(hwcrypto_err!(
                 UNSUPPORTED,
                 "unsupported Key lifetime {:?}",
-                self.key_header.key_lifetime
+                self.key_header.key_policy.key_lifetime
             )),
         }
     }
@@ -605,22 +642,22 @@ impl OpaqueKey {
             KeyMaterial::Hmac(_) => Ok(()),
             _ => Err(hwcrypto_err!(UNSUPPORTED, "Only HMAC keys can be used for key derivation")),
         }?;
-        if self.key_header.key_usage.0 != KeyUse::DERIVE {
+        if self.key_header.key_policy.key_usage.0 != KeyUse::DERIVE {
             return Err(hwcrypto_err!(BAD_PARAMETER, "key was not exclusively a derive key"));
         }
         Ok(())
     }
 
     pub(crate) fn key_usage_supported(&self, usage: KeyUse) -> bool {
-        (usage.0 & self.key_header.key_usage.0 .0) == usage.0
+        (usage.0 & self.key_header.key_policy.key_usage.0 .0) == usage.0
     }
 
     pub fn get_key_type(&self) -> KeyType {
-        self.key_header.key_type.0
+        self.key_header.key_policy.key_type.0
     }
 
     pub fn supports_pattern_encryption(&self) -> Result<(), HwCryptoError> {
-        match self.key_header.key_type.0 {
+        match self.key_header.key_policy.key_type.0 {
             KeyType::AES_128_CBC_NO_PADDING => Ok(()),
             _ => Err(hwcrypto_err!(BAD_PARAMETER, "only AES CBC supports pattern encryption")),
         }
