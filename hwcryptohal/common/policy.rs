@@ -16,6 +16,7 @@
 
 //! KeyPolicy serialization facilities
 
+use alloc::collections::btree_set::BTreeSet;
 use android_hardware_security_see::aidl::android::hardware::security::see::hwcrypto::types::{
     KeyLifetime::KeyLifetime, KeyPermissions::KeyPermissions, KeyType::KeyType, KeyUse::KeyUse,
 };
@@ -55,9 +56,10 @@ aidl_enum_wrapper! {
     fields: [ALLOW_EPHEMERAL_KEY_WRAPPING, ALLOW_HARDWARE_KEY_WRAPPING, ALLOW_PORTABLE_KEY_WRAPPING]
 }
 
+#[derive(Debug, PartialEq)]
 struct SerializableKeyPolicy {
     key_lifetime: KeyLifetimeSerializable,
-    key_permissions: Vec<KeyPermissionsSerializable>,
+    key_permissions: BTreeSet<KeyPermissionsSerializable>,
     key_usage: KeyUseSerializable,
     key_type: KeyTypeSerializable,
     management_key: bool,
@@ -65,13 +67,10 @@ struct SerializableKeyPolicy {
 
 impl SerializableKeyPolicy {
     fn new(key_policy: &KeyPolicy) -> Result<Self, crate::err::HwCryptoError> {
-        let mut key_permissions = Vec::new();
-        key_permissions.try_reserve(key_policy.keyPermissions.len())?;
+        let mut key_permissions = BTreeSet::new();
         for permission in &key_policy.keyPermissions {
-            key_permissions.push(KeyPermissionsSerializable(*permission));
+            key_permissions.insert(KeyPermissionsSerializable(*permission));
         }
-        key_permissions.sort();
-        key_permissions.dedup();
         Ok(Self {
             key_lifetime: KeyLifetimeSerializable(key_policy.keyLifetime),
             key_permissions,
@@ -90,12 +89,22 @@ impl TryFrom<&KeyPolicy> for SerializableKeyPolicy {
     }
 }
 
+impl TryFrom<KeyPolicy> for SerializableKeyPolicy {
+    type Error = crate::err::HwCryptoError;
+
+    fn try_from(value: KeyPolicy) -> Result<Self, Self::Error> {
+        (&value).try_into()
+    }
+}
+
 impl TryFrom<&SerializableKeyPolicy> for KeyPolicy {
     type Error = crate::err::HwCryptoError;
 
     fn try_from(value: &SerializableKeyPolicy) -> Result<Self, Self::Error> {
         let mut key_permissions = Vec::new();
         key_permissions.try_reserve(value.key_permissions.len())?;
+        // permissions on the returned key policy will be sorted because they are retrieved that
+        // way from the SerializableKeyPolicy
         for permission in &value.key_permissions {
             key_permissions.push((*permission).into());
         }
@@ -136,12 +145,12 @@ impl AsCborValue for SerializableKeyPolicy {
         cbor_map.push((key, value));
 
         // Creating key permissions array
-        // Because we sort the array when we create a `SerializableKeyPolicy` and never modify it,
-        // this array will be sorted at this point so the created CBOR structure will always match
-        // if the input vector has the same permissions.
+        // We need this array to always be sorted so the created CBOR structure will always match
+        // if the input vector has the same permissions, this is currently provided by
+        // `BTreeSet::into_iter` always returning the elements ordered in ascending order.
         let mut permissions = Vec::new();
         permissions.try_reserve(self.key_permissions.len()).map_err(|_| CoseError::EncodeFailed)?;
-        for permission in self.key_permissions {
+        for permission in self.key_permissions.into_iter() {
             permissions.push(Value::Integer(permission.into()));
         }
         let key = Value::Integer((HeaderCoseLabels::KeyPermissions as i64).into());
@@ -167,7 +176,7 @@ impl AsCborValue for SerializableKeyPolicy {
         let key_policy = value.into_map().map_err(|_| CoseError::ExtraneousData)?;
 
         let mut key_lifetime: Option<KeyLifetimeSerializable> = None;
-        let mut key_permissions: Option<Vec<KeyPermissionsSerializable>> = None;
+        let mut key_permissions: Option<BTreeSet<KeyPermissionsSerializable>> = None;
         let mut key_usage: Option<KeyUseSerializable> = None;
         let mut key_type: Option<KeyTypeSerializable> = None;
         let mut management_key: Option<bool> = None;
@@ -185,16 +194,15 @@ impl AsCborValue for SerializableKeyPolicy {
                     );
                 }
                 HeaderCoseLabels::KeyPermissions => {
-                    let mut permissions = Vec::new();
+                    let mut permissions = BTreeSet::new();
                     for permission in map_val.as_array().ok_or(CoseError::EncodeFailed)? {
-                        permissions.try_reserve(1).map_err(|_| CoseError::EncodeFailed)?;
-                        permissions.push(
+                        permissions.insert(
                             permission
                                 .as_integer()
                                 .ok_or(CoseError::EncodeFailed)?
                                 .try_into()
                                 .map_err(|_| CoseError::EncodeFailed)?,
-                        )
+                        );
                     }
                     key_permissions = Some(permissions);
                 }
@@ -305,22 +313,7 @@ pub fn cbor_policy_to_aidl(cbor_key_policy: &[u8]) -> Result<KeyPolicy, HwCrypto
 #[cfg(test)]
 mod tests {
     use super::*;
-    use test::expect;
-
-    // Because KeyPolicy is defined on an AIDL file we cannot directly derive Eq on them, so
-    // we need this function to do this work.
-    fn policies_match(policy1: &KeyPolicy, policy2: &KeyPolicy) -> bool {
-        let mut policy_matches = true;
-        policy_matches &= policy1.usage == policy2.usage;
-        policy_matches &= policy1.keyLifetime == policy2.keyLifetime;
-        policy_matches &= policy1.keyType == policy2.keyType;
-        policy_matches &= policy1.keyManagementKey == policy1.keyManagementKey;
-        policy_matches &= policy1.keyPermissions.len() == policy2.keyPermissions.len();
-        for permission in &policy1.keyPermissions {
-            policy_matches &= policy2.keyPermissions.contains(permission);
-        }
-        policy_matches
-    }
+    use test::{expect, expect_eq};
 
     #[test]
     fn serialize_policy() {
@@ -338,7 +331,9 @@ mod tests {
         let deserialization = cbor_policy_to_aidl(serialized_policy.as_slice());
         expect!(deserialization.is_ok(), "couldn't deserialize policy");
         let deserialized_policy = deserialization.unwrap();
-        expect!(policies_match(&policy, &deserialized_policy), "policies should match");
+        let policy: SerializableKeyPolicy = policy.try_into().unwrap();
+        let deserialized_policy: SerializableKeyPolicy = (&deserialized_policy).try_into().unwrap();
+        expect_eq!(policy, deserialized_policy, "policies should match");
     }
 
     #[test]
