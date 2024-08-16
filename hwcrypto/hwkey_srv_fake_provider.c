@@ -35,12 +35,16 @@
 #include <interface/hwkey/hwkey.h>
 #include <lib/system_state/system_state.h>
 #include <lib/tipc/tipc.h>
+#include <lib/tipc/tipc_srv.h>
 #include <trusty_log.h>
 
 #include <hwcrypto_consts.h>
 #include "hwkey_srv_priv.h"
 
 #pragma message "Compiling FAKE HWKEY provider"
+
+/* 0 means unlimited number of connections */
+#define HWKEY_MAX_NUM_CHANNELS 0
 
 /*
  *  This module is a sample only. For real device, this code
@@ -853,16 +857,6 @@ static const uuid_t* allowed_clients[] = {
         &hwbcc_unittest_uuid,
 };
 
-bool hwkey_client_allowed(const uuid_t* uuid) {
-    assert(uuid);
-    for (unsigned int i = 0; i < countof(allowed_clients); i++) {
-        if (memcmp(allowed_clients[i], uuid, sizeof(uuid_t)) == 0) {
-            return true;
-        }
-    }
-    return false;
-}
-
 /*
  *  List of keys slots that hwkey service supports
  */
@@ -1024,9 +1018,37 @@ static bool hwkey_self_test(void) {
 }
 
 /*
+ *  Initialize HWKEY service
+ */
+static int hwkey_start_service(struct tipc_hset* hset) {
+    TLOGD("Start HWKEY service\n");
+
+    static struct tipc_port_acl acl = {
+            .flags = IPC_PORT_ALLOW_TA_CONNECT,
+            .uuid_num = countof(allowed_clients),
+            .uuids = allowed_clients,
+    };
+
+    static struct tipc_port port = {
+            .name = HWKEY_PORT,
+            .msg_max_size = HWKEY_MAX_MSG_SIZE,
+            .msg_queue_len = 1,
+            .acl = &acl,
+    };
+
+    static struct tipc_srv_ops ops = {
+            .on_message = hwkey_chan_handle_msg,
+            .on_connect = hwkey_chan_ctx_create,
+            .on_channel_cleanup = hwkey_chan_ctx_close,
+    };
+
+    return tipc_add_service(hset, &port, 1, HWKEY_MAX_NUM_CHANNELS, &ops);
+}
+
+/*
  *  Initialize Fake HWKEY service provider
  */
-void hwkey_init_srv_provider(void) {
+int hwkey_init_srv_provider(struct tipc_hset* hset) {
     int rc;
 
     TLOGE("Init FAKE!!!! HWKEY service provider\n");
@@ -1042,8 +1064,10 @@ void hwkey_init_srv_provider(void) {
     hwkey_install_keys(_keys, countof(_keys));
 
     /* start service */
-    rc = hwkey_start_service();
+    rc = hwkey_start_service(hset);
     if (rc != NO_ERROR) {
         TLOGE("failed (%d) to start HWKEY service\n", rc);
     }
+
+    return rc;
 }
