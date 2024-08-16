@@ -104,20 +104,30 @@ enum CmdProcessorState {
 pub(crate) enum DataToProcess<'a> {
     VolatileSlice(VolatileSlice<'a>),
     Slice(&'a mut [u8]),
-    Vector(Vec<u8>),
 }
 
 impl<'a> DataToProcess<'a> {
-    pub(crate) fn new_from_vector(slice: Vec<u8>) -> Self {
-        DataToProcess::Vector(slice)
-    }
-
     pub(crate) fn len(&self) -> usize {
         match self {
             Self::VolatileSlice(vs) => vs.len(),
             Self::Slice(s) => s.len(),
-            Self::Vector(v) => v.len(),
         }
+    }
+
+    pub(crate) fn copy_slice(&mut self, from: &[u8]) -> Result<(), HwCryptoError> {
+        if self.len() < from.len() {
+            return Err(hwcrypto_err!(
+                BAD_PARAMETER,
+                "slice size: {} is less than the slice provided {}",
+                self.len(),
+                from.len()
+            ));
+        }
+        match self {
+            Self::VolatileSlice(to) => to.write_slice(from, 0)?,
+            Self::Slice(to) => to[..from.len()].copy_from_slice(from),
+        }
+        Ok(())
     }
 
     pub(crate) fn copy_from_slice(
@@ -138,17 +148,8 @@ impl<'a> DataToProcess<'a> {
             (Self::VolatileSlice(from), Self::VolatileSlice(to)) => {
                 from.copy_to_volatile_slice(to.get_slice(0, to.len())?)
             }
-            (Self::Vector(from), Self::VolatileSlice(to)) => to.write_slice(from.as_slice(), 0)?,
-            (Self::Slice(from), Self::Slice(to)) => to[0..from.len()].copy_from_slice(from),
+            (Self::Slice(from), Self::Slice(to)) => to[..from.len()].copy_from_slice(from),
             (Self::VolatileSlice(from), Self::Slice(to)) => from.read_slice(to, 0)?,
-            (Self::Vector(from), Self::Slice(to)) => {
-                to[0..from.len()].copy_from_slice(from.as_slice())
-            }
-            (Self::Slice(from), Self::Vector(to)) => to[0..from.len()].copy_from_slice(from),
-            (Self::VolatileSlice(from), Self::Vector(to)) => from.read_slice(to, 0)?,
-            (Self::Vector(from), Self::Vector(to)) => {
-                to[0..from.len()].copy_from_slice(from.as_slice())
-            }
         }
         Ok(())
     }
