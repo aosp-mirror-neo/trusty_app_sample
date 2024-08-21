@@ -41,6 +41,7 @@ use kmr_common::{
 };
 use kmr_wire::keymint::EcCurve;
 use std::sync::OnceLock;
+use tipc::Uuid;
 
 use crate::crypto_provider;
 use crate::helpers;
@@ -206,6 +207,7 @@ impl KeyHeader {
 pub struct OpaqueKey {
     pub(crate) key_header: KeyHeader,
     pub(crate) key_material: KeyMaterial,
+    pub(crate) connection_info_at_creation: Uuid,
 }
 
 impl TryFrom<&binder::Strong<dyn IOpaqueKey>> for OpaqueKey {
@@ -231,10 +233,12 @@ impl OpaqueKey {
     pub(crate) fn new_binder(
         policy: &KeyPolicy,
         key_material: KeyMaterial,
+        connection_info: Uuid,
     ) -> binder::Result<binder::Strong<dyn IOpaqueKey>> {
         let key_header = KeyHeader::new(policy)?;
         check_key_material_with_policy(&key_material, policy)?;
-        let opaque_key = OpaqueKey { key_header, key_material };
+        let opaque_key =
+            OpaqueKey { key_header, key_material, connection_info_at_creation: connection_info };
         let opaque_keybinder =
             BnOpaqueKey::new_binder(opaque_key, binder::BinderFeatures::default());
         Ok(opaque_keybinder)
@@ -253,31 +257,35 @@ impl OpaqueKey {
     pub(crate) fn import_key_material(
         policy: &KeyPolicy,
         key_material: KeyMaterial,
+        connection_info: Uuid,
     ) -> binder::Result<binder::Strong<dyn IOpaqueKey>> {
         check_key_material_with_policy(&key_material, policy)?;
         Self::check_clear_import_policy(policy)?;
-        Self::new_binder(policy, key_material)
+        Self::new_binder(policy, key_material, connection_info)
     }
 
     #[allow(unused)]
     pub(crate) fn generate_opaque_key(
         policy: &KeyPolicy,
+        connection_info: Uuid,
     ) -> binder::Result<binder::Strong<dyn IOpaqueKey>> {
         let key_material = generate_key_material(&policy.keyType, None)?;
-        OpaqueKey::new_binder(policy, key_material)
+        OpaqueKey::new_binder(policy, key_material, connection_info)
     }
     fn try_clone(&self) -> Result<Self, HwCryptoError> {
         let key_header = self.key_header.try_clone()?;
         let key_material = self.key_material.clone();
-        Ok(OpaqueKey { key_header, key_material })
+        let connection_info_at_creation = self.connection_info_at_creation.clone();
+        Ok(OpaqueKey { key_header, key_material, connection_info_at_creation })
     }
 
     fn new_opaque_key_from_raw_bytes(
         policy: &KeyPolicy,
         key_material: Vec<u8>,
+        connection_info: Uuid,
     ) -> binder::Result<binder::Strong<dyn IOpaqueKey>> {
         let key_material = generate_key_material(&policy.keyType, Some(key_material))?;
-        OpaqueKey::new_binder(policy, key_material)
+        OpaqueKey::new_binder(policy, key_material, connection_info)
     }
 
     pub(crate) fn check_key_derivation_parameters(
@@ -338,6 +346,7 @@ impl OpaqueKey {
         &self,
         policy: &[u8],
         context: &[u8],
+        connection_info: Uuid,
     ) -> binder::Result<binder::Strong<dyn IOpaqueKey>> {
         let aidl_policy = policy::cbor_policy_to_aidl(policy)?;
         self.check_key_derivation_parameters(&aidl_policy)?;
@@ -346,7 +355,7 @@ impl OpaqueKey {
         op_context.add_binary_string(policy)?;
         op_context.add_binary_string(context)?;
         let raw_key_material = self.derive_raw_key_material(op_context, derived_key_size)?;
-        Self::new_opaque_key_from_raw_bytes(&aidl_policy, raw_key_material)
+        Self::new_opaque_key_from_raw_bytes(&aidl_policy, raw_key_material, connection_info)
     }
 
     fn derivation_allowed_lifetime(
