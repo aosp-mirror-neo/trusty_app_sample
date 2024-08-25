@@ -50,6 +50,7 @@ pub(crate) trait ICryptographicOperation: Send {
 
     fn is_active(&self) -> bool;
 
+    #[allow(dead_code)]
     fn update_aad(&mut self, _input: &DataToProcess) -> Result<(), HwCryptoError> {
         Err(hwcrypto_err!(
             BAD_PARAMETER,
