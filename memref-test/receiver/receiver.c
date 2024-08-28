@@ -100,7 +100,11 @@ static int receiver_on_message(const struct tipc_port* port,
         strcpy(&out[skip * page_size], "Hello from Trusty!");
     }
 
-    munmap((void*)out, page_size * num_pages);
+    rc = munmap((void*)out, page_size * num_pages);
+    if (rc != NO_ERROR) {
+        TLOGE("munmap() failed: %d\n", rc);
+        return rc;
+    }
 
     close(handle);
 
