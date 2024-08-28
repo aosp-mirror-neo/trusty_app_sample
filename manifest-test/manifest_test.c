@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+#include <lk/macros.h>
+#include <sys/auxv.h>
 #include <sys/mman.h>
 #include <trusty/sys/mman.h>
 #include <trusty_unittest.h>
@@ -30,6 +32,8 @@
 #define TEST3_ID 3
 #define TEST3_PHY_BASE_ADDR 0x70020000U
 #define TEST3_REG_SIZE 0x4U
+
+#define PAGE_SIZE getauxval(AT_PAGESZ)
 
 typedef struct manifest_test {
 } manifest_test_t;
@@ -74,7 +78,8 @@ TEST_F(manifest_test, mem_map_test_1) {
 
 test_abort:
     if (va_base != MAP_FAILED) {
-        munmap(va_base, TEST1_REG_SIZE);
+        EXPECT_EQ(NO_ERROR,
+                  munmap(va_base, ROUND_UP(TEST1_REG_SIZE, PAGE_SIZE)));
     }
 }
 
@@ -91,7 +96,8 @@ TEST_F(manifest_test, mem_map_test_2) {
 
 test_abort:
     if (va_base != MAP_FAILED) {
-        munmap(va_base, TEST2_REG_SIZE);
+        EXPECT_EQ(NO_ERROR,
+                  munmap(va_base, ROUND_UP(TEST2_REG_SIZE, PAGE_SIZE)));
     }
 }
 
@@ -108,7 +114,8 @@ TEST_F(manifest_test, mem_map_test_3) {
 
 test_abort:
     if (va_base != MAP_FAILED) {
-        munmap(va_base, TEST3_REG_SIZE);
+        EXPECT_EQ(NO_ERROR,
+                  munmap(va_base, ROUND_UP(TEST3_REG_SIZE, PAGE_SIZE)));
     }
 }
 
@@ -126,7 +133,7 @@ TEST_F(manifest_test, mem_map_test_small_size) {
 
 test_abort:
     if (va_base != MAP_FAILED) {
-        munmap(va_base, size);
+        EXPECT_EQ(NO_ERROR, munmap(va_base, ROUND_UP(size, PAGE_SIZE)));
     }
 }
 
@@ -140,7 +147,7 @@ TEST_F(manifest_test, mem_map_test_large_size) {
 
 test_abort:
     if (va_base != MAP_FAILED) {
-        munmap(va_base, size);
+        EXPECT_EQ(NO_ERROR, munmap(va_base, ROUND_UP(size, PAGE_SIZE)));
     }
 }
 
@@ -154,7 +161,8 @@ TEST_F(manifest_test, mem_map_test_unknown_id) {
 
 test_abort:
     if (va_base != MAP_FAILED) {
-        munmap(va_base, TEST1_REG_SIZE);
+        EXPECT_EQ(NO_ERROR,
+                  munmap(va_base, ROUND_UP(TEST1_REG_SIZE, PAGE_SIZE)));
     }
 }
 
