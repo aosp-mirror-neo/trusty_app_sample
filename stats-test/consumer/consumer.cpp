@@ -202,7 +202,10 @@ static int test_ctl_on_message(const tipc_port* port,
         break;
     case CONSUMER_CTL_SHM_RECLAIM:
         if (ctx->shm_ptr) {
-            munmap((void*)ctx->shm_ptr, page_size);
+            int rc = munmap((void*)ctx->shm_ptr, page_size);
+            if (rc != NO_ERROR) {
+                TLOGW("munmap() failed: %d\n", rc);
+            }
             ctx->shm_ptr = nullptr;
         }
         break;
