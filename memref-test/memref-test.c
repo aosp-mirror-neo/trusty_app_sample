@@ -195,10 +195,10 @@ TEST(memref, dup_map) {
 
 test_abort:
     if (dbuf && dbuf != MAP_FAILED) {
-        munmap((void*)dbuf, PAGE_SIZE);
+        EXPECT_EQ(0, munmap((void*)dbuf, PAGE_SIZE));
     }
     if (mbuf && mbuf != MAP_FAILED) {
-        munmap((void*)mbuf, PAGE_SIZE);
+        EXPECT_EQ(0, munmap((void*)mbuf, PAGE_SIZE));
     }
     close(dref);
     close(mref);
