@@ -50,6 +50,7 @@ pub(crate) trait ICryptographicOperation: Send {
 
     fn is_active(&self) -> bool;
 
+    #[allow(dead_code)]
     fn update_aad(&mut self, _input: &DataToProcess) -> Result<(), HwCryptoError> {
         Err(hwcrypto_err!(
             BAD_PARAMETER,
@@ -136,7 +137,6 @@ impl TempBuffer {
     ) -> Result<&'a [u8], HwCryptoError> {
         match input {
             DataToProcess::Slice(slice) => Ok(slice),
-            DataToProcess::Vector(vec) => Ok(vec.as_slice()),
             DataToProcess::VolatileSlice(slice) => {
                 self.0.clear();
                 let slice_len = slice.len();
@@ -249,8 +249,7 @@ impl IBaseCryptoOperation for AesOperation {
         let input_data = input_buffer.get_buffer_reference(input)?;
         let output_data = op.update(input_data)?;
         let output_len = output_data.len();
-        let output_data_ref = DataToProcess::new_from_vector(output_data);
-        output.copy_from_slice(&output_data_ref)?;
+        output.copy_slice(output_data.as_slice())?;
         self.remaining_unaligned_data_size = unaligned_size;
         Ok(output_len)
     }
@@ -266,8 +265,7 @@ impl IBaseCryptoOperation for AesOperation {
         }
         let output_data = op.finish()?;
         let output_len = output_data.len();
-        let output_data_ref = DataToProcess::new_from_vector(output_data);
-        output.copy_from_slice(&output_data_ref)?;
+        output.copy_slice(output_data.as_slice())?;
         self.remaining_unaligned_data_size = 0;
         Ok(output_len)
     }
