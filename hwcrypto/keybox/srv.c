@@ -32,24 +32,13 @@
 #include "keybox.h"
 #include "srv.h"
 
+/* 0 means unlimited number of connections */
+#define KEYBOX_MAX_NUM_CHANNELS 0
+
 struct keybox_chan_ctx {
     struct tipc_event_handler evt_handler;
     handle_t chan;
 };
-
-static void keybox_port_handler(const uevent_t* ev, void* priv);
-static void keybox_chan_handler(const uevent_t* ev, void* priv);
-
-static handle_t keybox_port = INVALID_IPC_HANDLE;
-
-static struct tipc_event_handler keybox_port_evt_handler = {
-        .proc = keybox_port_handler,
-};
-
-static void keybox_shutdown(struct keybox_chan_ctx* ctx) {
-    close(ctx->chan);
-    free(ctx);
-}
 
 struct full_keybox_unwrap_req {
     struct keybox_unwrap_req unwrap_header;
@@ -106,11 +95,13 @@ struct full_keybox_req {
     } cmd_header;
 };
 
-static int keybox_handle_msg(struct keybox_chan_ctx* ctx) {
+static int keybox_chan_handle_msg(const struct tipc_port* port,
+                                  handle_t chan,
+                                  void* ctx) {
     int rc;
     struct full_keybox_req req;
     enum keybox_status status = KEYBOX_STATUS_SUCCESS;
-    rc = tipc_recv1(ctx->chan, sizeof(req.header), &req, sizeof(req));
+    rc = tipc_recv1(chan, sizeof(req.header), &req, sizeof(req));
     if (rc < 0) {
         TLOGE("Failed (%d) to receive Keybox message\n", rc);
         return KEYBOX_STATUS_INTERNAL_ERROR;
@@ -119,7 +110,7 @@ static int keybox_handle_msg(struct keybox_chan_ctx* ctx) {
     size_t cmd_specific_size = (size_t)rc - sizeof(req.header);
     switch (req.header.cmd) {
     case KEYBOX_CMD_UNWRAP:
-        rc = keybox_handle_unwrap(ctx->chan, &req.cmd_header.unwrap,
+        rc = keybox_handle_unwrap(chan, &req.cmd_header.unwrap,
                                   cmd_specific_size);
         break;
     default:
@@ -127,7 +118,7 @@ static int keybox_handle_msg(struct keybox_chan_ctx* ctx) {
         struct keybox_resp rsp;
         rsp.cmd = req.header.cmd | KEYBOX_CMD_RSP_BIT;
         rsp.status = KEYBOX_STATUS_INVALID_REQUEST;
-        rc = tipc_send1(ctx->chan, &rsp, sizeof(rsp));
+        rc = tipc_send1(chan, &rsp, sizeof(rsp));
     }
 
     if (rc < 0) {
@@ -137,86 +128,27 @@ static int keybox_handle_msg(struct keybox_chan_ctx* ctx) {
     return status;
 }
 
-static void keybox_chan_handler(const uevent_t* ev, void* priv) {
-    struct keybox_chan_ctx* ctx = (struct keybox_chan_ctx*)priv;
-    assert(ctx);
-    assert(ev->handle == ctx->chan);
-
-    tipc_handle_chan_errors(ev);
-    int rc = 0;
-    if (ev->event & IPC_HANDLE_POLL_MSG) {
-        rc = keybox_handle_msg(ctx);
-    }
-    if (ev->event & IPC_HANDLE_POLL_HUP) {
-        keybox_shutdown(ctx);
-    }
-    if (rc) {
-        keybox_shutdown(ctx);
-    }
-}
-
-static void keybox_port_handler(const uevent_t* ev, void* priv) {
-    uuid_t peer_uuid;
-
-    tipc_handle_port_errors(ev);
-
-    if (ev->event & IPC_HANDLE_POLL_READY) {
-        handle_t chan;
-
-        /* incoming connection: accept it */
-        int rc = accept(ev->handle, &peer_uuid);
-        if (rc < 0) {
-            TLOGE("failed (%d) to accept on port %d\n", rc, ev->handle);
-            return;
-        }
-        chan = (handle_t)rc;
-
-        struct keybox_chan_ctx* ctx = calloc(1, sizeof(struct keybox_chan_ctx));
-
-        if (!ctx) {
-            TLOGE("failed to alloc state for chan %d\n", chan);
-            close(chan);
-            return;
-        }
-
-        /* init channel state */
-        ctx->evt_handler.priv = ctx;
-        ctx->evt_handler.proc = keybox_chan_handler;
-        ctx->chan = chan;
-
-        /* attach channel handler */
-        rc = set_cookie(chan, &ctx->evt_handler);
-        if (rc) {
-            TLOGE("failed (%d) to set_cookie on chan %d\n", rc, chan);
-            free(ctx);
-            close(chan);
-            return;
-        }
-    }
-}
-
 /*
  *  Initialize Keybox service
  */
-int keybox_start_service(void) {
-    int rc;
-
+int keybox_start_service(struct tipc_hset* hset) {
     TLOGD("Start Keybox service\n");
 
-    /* create Keybox port */
-    rc = port_create(KEYBOX_PORT, 1, sizeof(struct full_keybox_req),
-                     IPC_PORT_ALLOW_TA_CONNECT);
-    if (rc < 0) {
-        TLOGE("Failed (%d) to create port '%s'\n", rc, KEYBOX_PORT);
-        goto cleanup;
-    }
+    // TODO: check why we are not restricting connections by uuid
+    static struct tipc_port_acl acl = {
+            .flags = IPC_PORT_ALLOW_TA_CONNECT,
+            .uuid_num = 0,
+            .uuids = NULL,
+    };
 
-    keybox_port = (handle_t)rc;
-    set_cookie(keybox_port, &keybox_port_evt_handler);
-
-    return NO_ERROR;
-
-cleanup:
-    close(keybox_port);
-    return rc;
+    static struct tipc_port port = {
+            .name = KEYBOX_PORT,
+            .msg_max_size = sizeof(struct full_keybox_req),
+            .msg_queue_len = 1,
+            .acl = &acl,
+    };
+    static struct tipc_srv_ops ops = {
+            .on_message = keybox_chan_handle_msg,
+    };
+    return tipc_add_service(hset, &port, 1, KEYBOX_MAX_NUM_CHANNELS, &ops);
 }
