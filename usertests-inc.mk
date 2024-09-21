@@ -16,7 +16,6 @@
 include trusty/user/app/sample/stats-test/usertests-inc.mk
 
 TRUSTY_USER_TESTS += \
-	trusty/user/app/sample/hwcryptohal/server/app \
 	trusty/user/app/sample/app-mgmt-test/client\
 	trusty/user/app/sample/binder-test/client \
 	trusty/user/app/sample/binder-test/service \
