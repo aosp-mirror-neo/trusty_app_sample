@@ -401,6 +401,13 @@ impl OpaqueKey {
         self.key_header.key_type.0
     }
 
+    pub fn supports_pattern_encryption(&self) -> Result<(), HwCryptoError> {
+        match self.key_header.key_type.0 {
+            KeyType::AES_128_CBC_NO_PADDING => Ok(()),
+            _ => Err(hwcrypto_err!(BAD_PARAMETER, "only AES CBC supports pattern encryption")),
+        }
+    }
+
     /// Checks if the requested operation (encrypt/decrypt) can be done with this key
     pub(crate) fn symmetric_operation_is_compatible(
         &self,
