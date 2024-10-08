@@ -16,21 +16,59 @@
 
 //! Module providing a shim for the different crypto operations.
 
-use android_hardware_security_see::aidl::android::hardware::security::see::hwcrypto::{
-    OperationParameters::OperationParameters,
-};
 use android_hardware_security_see::aidl::android::hardware::security::see::hwcrypto::types::{
-    SymmetricCryptoParameters::SymmetricCryptoParameters,
-    SymmetricOperation::SymmetricOperation,
+    SymmetricCryptoParameters::SymmetricCryptoParameters, SymmetricOperation::SymmetricOperation,
+};
+use android_hardware_security_see::aidl::android::hardware::security::see::hwcrypto::{
+    OperationParameters::OperationParameters, PatternParameters::PatternParameters,
 };
 use hwcryptohal_common::{err::HwCryptoError, hwcrypto_err};
 use kmr_common::crypto::{self, Aes, KeyMaterial, SymmetricOperation as CryptoSymmetricOperation};
-use vm_memory::Bytes;
 
 use crate::cmd_processing::DataToProcess;
 use crate::crypto_provider;
 use crate::helpers;
 use crate::opaque_key::OpaqueKey;
+
+// Pattern for cbcs operations. cbcs is based on partially encryption using AES-CBC as defined in
+// IEC 23001-7:2016
+enum CbcsPattern {
+    Protected(usize),
+    Clear(usize),
+}
+
+struct CbcsPatternParams {
+    num_encrypted_bytes: usize,
+    num_clear_bytes: usize,
+    current_pattern: CbcsPattern,
+}
+
+impl CbcsPatternParams {
+    fn new(pattern_parameters: &PatternParameters) -> Result<Self, HwCryptoError> {
+        let mut num_encrypted_blocks: usize =
+            pattern_parameters.numberBlocksProcess.try_into().map_err(|e| {
+                hwcrypto_err!(BAD_PARAMETER, "number encrypted blocks cannot be negative: {:?}", e)
+            })?;
+        let num_clear_blocks: usize =
+            pattern_parameters.numberBlocksCopy.try_into().map_err(|e| {
+                hwcrypto_err!(BAD_PARAMETER, "number clear blocks cannot be negative: {:?}", e)
+            })?;
+        // Special case. Some encoders pass a 0,0 to represent full sample encryption. Treating it
+        // the same as 1, 0.
+        if (num_encrypted_blocks == 0) && (num_clear_blocks == 0) {
+            num_encrypted_blocks = 1;
+        }
+        let num_encrypted_bytes = num_encrypted_blocks
+            .checked_mul(crypto::aes::BLOCK_SIZE)
+            .ok_or(hwcrypto_err!(BAD_PARAMETER, "number encrypted blocks was too high"))?;
+        let num_clear_bytes = num_clear_blocks
+            .checked_mul(crypto::aes::BLOCK_SIZE)
+            .ok_or(hwcrypto_err!(BAD_PARAMETER, "number clear blocks was too high"))?;
+        // Patterns starts with a number of protected blocks
+        let current_pattern = CbcsPattern::Protected(num_encrypted_bytes);
+        Ok(Self { num_encrypted_bytes, num_clear_bytes, current_pattern })
+    }
+}
 
 pub(crate) trait ICryptographicOperation: Send {
     // Returns the required minimum size in bytes the output buffer needs to have for the given
@@ -43,8 +81,8 @@ pub(crate) trait ICryptographicOperation: Send {
 
     fn operation<'a>(
         &mut self,
-        input: Option<DataToProcess<'a>>,
-        output: DataToProcess<'a>,
+        input: Option<&mut DataToProcess<'a>>,
+        output: &mut DataToProcess<'a>,
         is_finish: bool,
     ) -> Result<usize, HwCryptoError>;
 
@@ -57,13 +95,20 @@ pub(crate) trait ICryptographicOperation: Send {
             "update aad only valid for authenticated symmetric operations"
         ))
     }
+
+    fn set_operation_pattern(
+        &mut self,
+        _patter_parameter: &PatternParameters,
+    ) -> Result<(), HwCryptoError> {
+        Err(hwcrypto_err!(BAD_PARAMETER, "set_operation_pattern only supported for AES CBC"))
+    }
 }
 
 trait IBaseCryptoOperation: Send {
-    fn update(
+    fn update<'a>(
         &mut self,
-        input: &DataToProcess,
-        output: &mut DataToProcess,
+        input: &mut DataToProcess<'a>,
+        output: &mut DataToProcess<'a>,
     ) -> Result<usize, HwCryptoError>;
 
     fn finish(&mut self, output: &mut DataToProcess) -> Result<usize, HwCryptoError>;
@@ -80,6 +125,11 @@ trait IBaseCryptoOperation: Send {
             "update aad only valid for authenticated symmetric operations"
         ))
     }
+
+    fn set_operation_pattern(
+        &mut self,
+        patter_parameter: &PatternParameters,
+    ) -> Result<(), HwCryptoError>;
 }
 
 impl<T: IBaseCryptoOperation> ICryptographicOperation for T {
@@ -97,18 +147,18 @@ impl<T: IBaseCryptoOperation> ICryptographicOperation for T {
         }
     }
 
-    fn operation(
+    fn operation<'a>(
         &mut self,
-        input: Option<DataToProcess>,
-        mut output: DataToProcess,
+        mut input: Option<&mut DataToProcess<'a>>,
+        output: &mut DataToProcess<'a>,
         is_finish: bool,
     ) -> Result<usize, HwCryptoError> {
         if is_finish {
-            self.finish(&mut output)
+            self.finish(output)
         } else {
             let input =
-                input.as_ref().ok_or(hwcrypto_err!(BAD_PARAMETER, "input was not provided"))?;
-            self.update(&input, &mut output)
+                input.take().ok_or(hwcrypto_err!(BAD_PARAMETER, "input was not provided"))?;
+            self.update(input, output)
         }
     }
 
@@ -118,6 +168,13 @@ impl<T: IBaseCryptoOperation> ICryptographicOperation for T {
 
     fn update_aad(&mut self, input: &DataToProcess) -> Result<(), HwCryptoError> {
         self.update_aad(input)
+    }
+
+    fn set_operation_pattern(
+        &mut self,
+        patter_parameter: &PatternParameters,
+    ) -> Result<(), HwCryptoError> {
+        self.set_operation_pattern(patter_parameter)
     }
 }
 
@@ -131,32 +188,43 @@ impl TempBuffer {
         TempBuffer(Vec::new())
     }
 
-    fn get_buffer_reference<'a>(
+    fn read_into_buffer_reference<'a>(
         &'a mut self,
-        input: &'a DataToProcess,
+        input: &'a mut DataToProcess,
+        len: Option<usize>,
     ) -> Result<&'a [u8], HwCryptoError> {
-        match input {
-            DataToProcess::Slice(slice) => Ok(slice),
-            DataToProcess::VolatileSlice(slice) => {
-                self.0.clear();
-                let slice_len = slice.len();
-                self.0.try_reserve(slice_len)?;
-                // Addition should be safe because try_reserve didn't fail
-                self.0.resize_with(slice_len, Default::default);
-                slice.read_slice(&mut self.0, 0)?;
-                Ok(&self.0[..])
-            }
+        let len = len.unwrap_or(input.len());
+        if len > input.len() {
+            return Err(hwcrypto_err!(
+                BAD_PARAMETER,
+                "end {} out of slice bounds for slice size {}",
+                len,
+                input.len()
+            ));
+        }
+
+        if !input.is_non_volatile_slice_backed() {
+            let slice = input.try_slice(len)?;
+            Ok(slice)
+        } else {
+            self.0.clear();
+            self.0.try_reserve(len)?;
+            // Addition should be safe because try_reserve didn't fail
+            self.0.resize_with(len, Default::default);
+            input.read_into_slice(self.0.as_mut_slice(), Some(len))?;
+            Ok(&self.0[..])
         }
     }
 }
 
-#[allow(dead_code)]
 pub(crate) struct AesOperation {
     opaque_key: OpaqueKey,
     emitting_op: Option<Box<dyn crypto::EmittingOperation>>,
     dir: CryptoSymmetricOperation,
     remaining_unaligned_data_size: usize,
     block_based_encryption: bool,
+    cbcs_pattern: Option<CbcsPatternParams>,
+    operation_started: bool,
 }
 
 impl AesOperation {
@@ -185,6 +253,8 @@ impl AesOperation {
             dir,
             remaining_unaligned_data_size: 0,
             block_based_encryption,
+            cbcs_pattern: None,
+            operation_started: false,
         };
         Ok(aes_operation)
     }
@@ -228,15 +298,105 @@ impl AesOperation {
     fn round_to_block_size(size: usize) -> usize {
         ((size + crypto::aes::BLOCK_SIZE - 1) / crypto::aes::BLOCK_SIZE) * crypto::aes::BLOCK_SIZE
     }
+
+    fn cbcs_update<'a>(
+        &mut self,
+        input: &mut DataToProcess<'a>,
+        output: &mut DataToProcess<'a>,
+    ) -> Result<usize, HwCryptoError> {
+        let total_size = input.len();
+        if (total_size % crypto::aes::BLOCK_SIZE) != 0 {
+            return Err(hwcrypto_err!(
+                BAD_PARAMETER,
+                "input size was not multiple of {}: {}",
+                crypto::aes::BLOCK_SIZE,
+                input.len()
+            ));
+        }
+        if output.len() != input.len() {
+            return Err(hwcrypto_err!(BAD_PARAMETER, "output size was not {}", input.len()));
+        }
+        let cbcs_pattern = self
+            .cbcs_pattern
+            .as_mut()
+            .ok_or(hwcrypto_err!(BAD_PARAMETER, "not a cbcs operation"))?;
+        // TODO: refactor to remove need of input copy for memory slices
+        let mut input_buff = TempBuffer::new();
+        let mut remaining_len = total_size;
+        let aes_op = self
+            .emitting_op
+            .as_mut()
+            .ok_or(hwcrypto_err!(BAD_STATE, "operation was already finished"))?;
+        while remaining_len > 0 {
+            match cbcs_pattern.current_pattern {
+                CbcsPattern::Protected(num_encrypted_bytes) => {
+                    let encrypted_bytes = std::cmp::min(remaining_len, num_encrypted_bytes);
+                    let input_data =
+                        input_buff.read_into_buffer_reference(input, Some(encrypted_bytes))?;
+                    let output_data = aes_op.update(input_data)?;
+                    output.append_slice(output_data.as_slice())?;
+                    if remaining_len > num_encrypted_bytes {
+                        // There is still data to process, advance index and change pattern to clear
+                        // In this case encrypted_bytes == num_encrypted_bytes
+                        cbcs_pattern.current_pattern =
+                            CbcsPattern::Clear(cbcs_pattern.num_clear_bytes);
+                    } else {
+                        // We processed all available data, check if we should change pattern or
+                        // keep the same
+                        if num_encrypted_bytes > remaining_len {
+                            // We are still on the protected pattern area
+                            cbcs_pattern.current_pattern =
+                                CbcsPattern::Protected(num_encrypted_bytes - remaining_len);
+                        } else {
+                            // We need to switch to a clear area
+                            cbcs_pattern.current_pattern =
+                                CbcsPattern::Clear(cbcs_pattern.num_clear_bytes);
+                        }
+                        break;
+                    }
+                    remaining_len -= num_encrypted_bytes;
+                }
+                CbcsPattern::Clear(num_clear_bytes) => {
+                    let clear_bytes = std::cmp::min(remaining_len, num_clear_bytes);
+                    output.read_from_slice(input, Some(clear_bytes))?;
+                    if remaining_len > num_clear_bytes {
+                        // There is still data to process, advance index and change pattern to
+                        // protected. In this case clear_bytes == num_clear_bytes
+                        cbcs_pattern.current_pattern =
+                            CbcsPattern::Protected(cbcs_pattern.num_encrypted_bytes);
+                    } else {
+                        // We processed all available data, check if we should change pattern or
+                        // keep the same
+                        if num_clear_bytes > remaining_len {
+                            // We are still on the clear pattern area
+                            cbcs_pattern.current_pattern =
+                                CbcsPattern::Clear(num_clear_bytes - remaining_len);
+                        } else {
+                            // We need to switch to a protected area
+                            cbcs_pattern.current_pattern =
+                                CbcsPattern::Protected(cbcs_pattern.num_encrypted_bytes);
+                        }
+                        break;
+                    }
+                    remaining_len -= num_clear_bytes;
+                }
+            }
+        }
+        Ok(total_size)
+    }
 }
 
 impl IBaseCryptoOperation for AesOperation {
-    fn update(
+    fn update<'a>(
         &mut self,
-        input: &DataToProcess,
-        output: &mut DataToProcess,
+        input: &mut DataToProcess<'a>,
+        output: &mut DataToProcess<'a>,
     ) -> Result<usize, HwCryptoError> {
-        let (req_size, unaligned_size) = self.get_update_req_size_with_remainder(input)?;
+        self.operation_started = true;
+        if self.cbcs_pattern.is_some() {
+            return self.cbcs_update(input, output);
+        }
+        let (req_size, unaligned_size) = self.get_update_req_size_with_remainder(&input)?;
         if output.len() != req_size {
             return Err(hwcrypto_err!(BAD_PARAMETER, "input size was not {}", req_size));
         }
@@ -246,10 +406,10 @@ impl IBaseCryptoOperation for AesOperation {
             .ok_or(hwcrypto_err!(BAD_STATE, "operation was already finished"))?;
         // TODO: refactor traits to not require copying the input for VolatileSlices
         let mut input_buffer = TempBuffer::new();
-        let input_data = input_buffer.get_buffer_reference(input)?;
+        let input_data = input_buffer.read_into_buffer_reference(input, None)?;
         let output_data = op.update(input_data)?;
         let output_len = output_data.len();
-        output.copy_slice(output_data.as_slice())?;
+        output.append_slice(output_data.as_slice())?;
         self.remaining_unaligned_data_size = unaligned_size;
         Ok(output_len)
     }
@@ -265,8 +425,9 @@ impl IBaseCryptoOperation for AesOperation {
         }
         let output_data = op.finish()?;
         let output_len = output_data.len();
-        output.copy_slice(output_data.as_slice())?;
+        output.append_slice(output_data.as_slice())?;
         self.remaining_unaligned_data_size = 0;
+        self.operation_started = false;
         Ok(output_len)
     }
 
@@ -275,20 +436,59 @@ impl IBaseCryptoOperation for AesOperation {
     }
 
     fn get_req_size_finish(&self) -> Result<usize, HwCryptoError> {
-        let (req_size_to_process, _) = self.get_req_size_from_len(0)?;
-        match self.dir {
-            CryptoSymmetricOperation::Encrypt => Ok(req_size_to_process + crypto::aes::BLOCK_SIZE),
-            CryptoSymmetricOperation::Decrypt => Ok(crypto::aes::BLOCK_SIZE),
+        if self.cbcs_pattern.is_some() {
+            // On CBCS patterns we do not have more data to write on finish, because there is no
+            // padding needed and all operations were done using block boundaries.
+            Ok(0)
+        } else {
+            let (req_size_to_process, _) = self.get_req_size_from_len(0)?;
+            match self.dir {
+                CryptoSymmetricOperation::Encrypt => {
+                    Ok(req_size_to_process + crypto::aes::BLOCK_SIZE)
+                }
+                CryptoSymmetricOperation::Decrypt => Ok(crypto::aes::BLOCK_SIZE),
+            }
         }
     }
 
     fn get_req_size_update(&self, input: &DataToProcess) -> Result<usize, HwCryptoError> {
-        let (req_size, _) = self.get_update_req_size_with_remainder(input)?;
-        Ok(req_size)
+        if self.cbcs_pattern.is_some() {
+            // On CBCS patterns we are currently processing a number of bytes multiple of block
+            // sizes, so the space needed is always the size of the input.
+            if (input.len() % crypto::aes::BLOCK_SIZE) != 0 {
+                return Err(hwcrypto_err!(
+                    BAD_PARAMETER,
+                    "input size was not multiple of {}: {}",
+                    crypto::aes::BLOCK_SIZE,
+                    input.len()
+                ));
+            }
+            Ok(input.len())
+        } else {
+            let (req_size, _) = self.get_update_req_size_with_remainder(input)?;
+            Ok(req_size)
+        }
     }
 
     fn is_active(&self) -> bool {
         self.emitting_op.is_some()
+    }
+
+    fn set_operation_pattern(
+        &mut self,
+        pattern_parameters: &PatternParameters,
+    ) -> Result<(), HwCryptoError> {
+        self.opaque_key.supports_pattern_encryption()?;
+        // We only support setting a pattern if we have not started encrypting/decrypting
+        if self.operation_started {
+            return Err(hwcrypto_err!(BAD_STATE, "pattern cannot be set if operation has started"));
+        }
+        // We do not support changing an already set up pattern
+        if self.cbcs_pattern.is_some() {
+            return Err(hwcrypto_err!(BAD_STATE, "pattern has already been set"));
+        }
+        self.cbcs_pattern = Some(CbcsPatternParams::new(pattern_parameters)?);
+        Ok(())
     }
 }
 
@@ -306,13 +506,14 @@ impl ICryptographicOperation for CopyOperation {
 
     fn operation<'a>(
         &mut self,
-        input: Option<DataToProcess<'a>>,
-        mut output: DataToProcess<'a>,
+        input: Option<&mut DataToProcess<'a>>,
+        output: &mut DataToProcess<'a>,
         _is_finish: bool,
     ) -> Result<usize, HwCryptoError> {
-        let num_bytes_copy = self.get_operation_req_size(input.as_ref(), false)?;
-        let input = input.ok_or_else(|| hwcrypto_err!(BAD_PARAMETER, "input was not provided"))?;
-        output.copy_from_slice(&input)?;
+        let num_bytes_copy = self.get_operation_req_size(input.as_deref(), false)?;
+        let mut input =
+            input.ok_or_else(|| hwcrypto_err!(BAD_PARAMETER, "input was not provided"))?;
+        output.read_from_slice(&mut input, None)?;
         Ok(num_bytes_copy)
     }
 
@@ -358,8 +559,8 @@ impl ICryptographicOperation for () {
 
     fn operation(
         &mut self,
-        _input: Option<DataToProcess>,
-        mut _output: DataToProcess,
+        _input: Option<&mut DataToProcess>,
+        _output: &mut DataToProcess,
         _is_finish: bool,
     ) -> Result<usize, HwCryptoError> {
         Err(hwcrypto_err!(UNSUPPORTED, "nothing to execute on null operation"))
@@ -408,7 +609,7 @@ mod tests {
         let op_params = OperationParameters::SymmetricCrypto(sym_op_params);
         let input_to_encrypt = "hello world1234";
         let mut input_data = input_to_encrypt.as_bytes().to_vec();
-        let input_slice = DataToProcess::Slice(&mut input_data[..]);
+        let mut input_slice = DataToProcess::new_from_slice(&mut input_data[..]);
         let mut op =
             CryptographicOperation::new_binder(&op_params).expect("couldn't create aes operation");
         let req_size = op
@@ -416,9 +617,10 @@ mod tests {
             .expect("couldn't get required_size");
         expect_eq!(req_size, 0, "Required size for encryptiong less than a block should be 0");
         let mut output_data = vec![];
-        let output_slice = DataToProcess::Slice(&mut output_data[..]);
-        let written_bytes =
-            op.operation(Some(input_slice), output_slice, false).expect("couldn't update");
+        let mut output_slice = DataToProcess::new_from_slice(&mut output_data[..]);
+        let written_bytes = op
+            .operation(Some(&mut input_slice), &mut output_slice, false)
+            .expect("couldn't update");
         expect_eq!(written_bytes, 0, "Written bytes for encryptiong less than a block should be 0");
         let req_size_finish =
             op.get_operation_req_size(None, true).expect("couldn't get required_size");
@@ -428,14 +630,14 @@ mod tests {
             "Required size for encryptiong less than a block should be a block"
         );
         output_data.append(&mut vec![0u8; 16]);
-        let output_slice = DataToProcess::Slice(&mut output_data[..]);
-        op.operation(None, output_slice, true).expect("couldn't finish");
-        let output_slice = DataToProcess::Slice(&mut output_data[0..0]);
-        let input_slice = DataToProcess::Slice(&mut input_data[..]);
-        let update_op = op.operation(Some(input_slice), output_slice, false);
+        let mut output_slice = DataToProcess::new_from_slice(&mut output_data[..]);
+        op.operation(None, &mut output_slice, true).expect("couldn't finish");
+        let mut output_slice = DataToProcess::new_from_slice(&mut output_data[0..0]);
+        let mut input_slice = DataToProcess::new_from_slice(&mut input_data[..]);
+        let update_op = op.operation(Some(&mut input_slice), &mut output_slice, false);
         expect!(update_op.is_err(), "shouldn't be able to run operations anymore");
-        let output_slice = DataToProcess::Slice(&mut output_data[0..0]);
-        let finish_op = op.operation(None, output_slice, true);
+        let mut output_slice = DataToProcess::new_from_slice(&mut output_data[0..0]);
+        let finish_op = op.operation(None, &mut output_slice, true);
         expect!(finish_op.is_err(), "shouldn't be able to run operations anymore");
         let direction = SymmetricOperation::DECRYPT;
         let parameters = SymmetricCryptoParameters::Aes(AesCipherMode::Cbc(CipherModeParameters {
@@ -446,21 +648,24 @@ mod tests {
         let op_params = OperationParameters::SymmetricCrypto(sym_op_params);
         let mut op =
             CryptographicOperation::new_binder(&op_params).expect("couldn't create aes operation");
-        let output_slice = DataToProcess::Slice(&mut output_data[..]);
+        let mut output_slice = DataToProcess::new_from_slice(&mut output_data[..]);
         let req_size = op
             .get_operation_req_size(Some(&output_slice), false)
             .expect("couldn't get required_size");
         let mut decrypted_data = vec![0; req_size];
-        let decrypted_slice = DataToProcess::Slice(&mut decrypted_data[..]);
-        let mut decrypted_data_size =
-            op.operation(Some(output_slice), decrypted_slice, false).expect("couldn't update");
+        let mut decrypted_slice = DataToProcess::new_from_slice(&mut decrypted_data[..]);
+        let mut decrypted_data_size = op
+            .operation(Some(&mut output_slice), &mut decrypted_slice, false)
+            .expect("couldn't update");
         let decrypted_data_start = decrypted_data_size;
         let req_size_finish =
             op.get_operation_req_size(None, true).expect("couldn't get required_size");
         let decrypted_data_end = decrypted_data_size + req_size_finish;
-        let decrypted_slice =
-            DataToProcess::Slice(&mut decrypted_data[decrypted_data_start..decrypted_data_end]);
-        let total_finish_size = op.operation(None, decrypted_slice, true).expect("couldn't finish");
+        let mut decrypted_slice = DataToProcess::new_from_slice(
+            &mut decrypted_data[decrypted_data_start..decrypted_data_end],
+        );
+        let total_finish_size =
+            op.operation(None, &mut decrypted_slice, true).expect("couldn't finish");
         decrypted_data_size += total_finish_size;
         decrypted_data.truncate(decrypted_data_size);
         expect_eq!(input_to_encrypt.len(), decrypted_data_size, "bad length for decrypted data");
@@ -492,80 +697,91 @@ mod tests {
             CryptographicOperation::new_binder(&op_params).expect("couldn't create aes operation");
         let input_to_encrypt = "test encryption string";
         let mut input_data = input_to_encrypt.as_bytes().to_vec();
-        let input_slice = DataToProcess::Slice(&mut input_data[..]);
+        let mut input_slice = DataToProcess::new_from_slice(&mut input_data[..]);
         let req_size = op
             .get_operation_req_size(Some(&input_slice), false)
             .expect("couldn't get required_size");
         expect_eq!(req_size, 16, "Implementation should try to encrypt a block in this case");
         let mut output_data = vec![0; 200];
-        let output_slice = DataToProcess::Slice(&mut output_data[..req_size]);
+        let mut output_slice = DataToProcess::new_from_slice(&mut output_data[..req_size]);
         let mut total_encryption_size = 0;
-        let written_bytes =
-            op.operation(Some(input_slice), output_slice, false).expect("couldn't update");
+        let written_bytes = op
+            .operation(Some(&mut input_slice), &mut output_slice, false)
+            .expect("couldn't update");
         total_encryption_size += written_bytes;
         expect_eq!(written_bytes, 16, "A block should have been encrypted");
         let input_to_encrypt_2 = " for this ";
         let mut input_data = input_to_encrypt_2.as_bytes().to_vec();
-        let input_slice = DataToProcess::Slice(&mut input_data[..]);
+        let mut input_slice = DataToProcess::new_from_slice(&mut input_data[..]);
         let req_size = op
             .get_operation_req_size(Some(&input_slice), false)
             .expect("couldn't get required_size");
         let output_start = written_bytes;
         let output_stop = written_bytes + req_size;
         expect_eq!(req_size, 16, "Implementation should try to encrypt a block in this case");
-        let output_slice = DataToProcess::Slice(&mut output_data[output_start..output_stop]);
-        let written_bytes =
-            op.operation(Some(input_slice), output_slice, false).expect("couldn't update");
+        let mut output_slice =
+            DataToProcess::new_from_slice(&mut output_data[output_start..output_stop]);
+        let written_bytes = op
+            .operation(Some(&mut input_slice), &mut output_slice, false)
+            .expect("couldn't update");
         expect_eq!(written_bytes, 16, "A block should have been encrypted");
         total_encryption_size += written_bytes;
         let output_start = output_start + written_bytes;
         let input_to_encrypt_3 = "test";
         let mut input_data = input_to_encrypt_3.as_bytes().to_vec();
-        let input_slice = DataToProcess::Slice(&mut input_data[..]);
+        let mut input_slice = DataToProcess::new_from_slice(&mut input_data[..]);
         let req_size = op
             .get_operation_req_size(Some(&input_slice), false)
             .expect("couldn't get required_size");
         expect_eq!(req_size, 0, "Required size for encryptiong less than a block should be 0");
-        let output_slice = DataToProcess::Slice(&mut output_data[output_start..output_start]);
-        let written_bytes =
-            op.operation(Some(input_slice), output_slice, false).expect("couldn't update");
+        let mut output_slice =
+            DataToProcess::new_from_slice(&mut output_data[output_start..output_start]);
+        let written_bytes = op
+            .operation(Some(&mut input_slice), &mut output_slice, false)
+            .expect("couldn't update");
         total_encryption_size += written_bytes;
         expect_eq!(written_bytes, 0, "No bytes should have been written");
         let input_to_encrypt_4 = " is";
         let mut input_data = input_to_encrypt_4.as_bytes().to_vec();
-        let input_slice = DataToProcess::Slice(&mut input_data[..]);
+        let mut input_slice = DataToProcess::new_from_slice(&mut input_data[..]);
         let req_size = op
             .get_operation_req_size(Some(&input_slice), false)
             .expect("couldn't get required_size");
         expect_eq!(req_size, 0, "Required size for encryptiong less than a block should be 0");
-        let output_slice = DataToProcess::Slice(&mut output_data[output_start..output_start]);
-        let written_bytes =
-            op.operation(Some(input_slice), output_slice, false).expect("couldn't update");
+        let mut output_slice =
+            DataToProcess::new_from_slice(&mut output_data[output_start..output_start]);
+        let written_bytes = op
+            .operation(Some(&mut input_slice), &mut output_slice, false)
+            .expect("couldn't update");
         expect_eq!(written_bytes, 0, "No bytes should have been written");
         total_encryption_size += written_bytes;
         let input_to_encrypt_5 = " a ";
         let mut input_data = input_to_encrypt_5.as_bytes().to_vec();
-        let input_slice = DataToProcess::Slice(&mut input_data[..]);
+        let mut input_slice = DataToProcess::new_from_slice(&mut input_data[..]);
         let req_size = op
             .get_operation_req_size(Some(&input_slice), false)
             .expect("couldn't get required_size");
         expect_eq!(req_size, 0, "Required size for encryptiong less than a block should be 0");
-        let output_slice = DataToProcess::Slice(&mut output_data[output_start..output_start]);
-        let written_bytes =
-            op.operation(Some(input_slice), output_slice, false).expect("couldn't update");
+        let mut output_slice =
+            DataToProcess::new_from_slice(&mut output_data[output_start..output_start]);
+        let written_bytes = op
+            .operation(Some(&mut input_slice), &mut output_slice, false)
+            .expect("couldn't update");
         expect_eq!(written_bytes, 0, "No bytes should have been written");
         total_encryption_size += written_bytes;
         let input_to_encrypt_6 = "random one.";
         let mut input_data = input_to_encrypt_6.as_bytes().to_vec();
-        let input_slice = DataToProcess::Slice(&mut input_data[..]);
+        let mut input_slice = DataToProcess::new_from_slice(&mut input_data[..]);
         let req_size = op
             .get_operation_req_size(Some(&input_slice), false)
             .expect("couldn't get required_size");
         expect_eq!(req_size, 16, "Implementation should try to encrypt a block in this case");
         let output_stop = output_start + req_size;
-        let output_slice = DataToProcess::Slice(&mut output_data[output_start..output_stop]);
-        let written_bytes =
-            op.operation(Some(input_slice), output_slice, false).expect("couldn't update");
+        let mut output_slice =
+            DataToProcess::new_from_slice(&mut output_data[output_start..output_stop]);
+        let written_bytes = op
+            .operation(Some(&mut input_slice), &mut output_slice, false)
+            .expect("couldn't update");
         total_encryption_size += written_bytes;
         expect_eq!(written_bytes, 16, "A block should have been encrypted");
         let output_start = output_start + written_bytes;
@@ -577,8 +793,10 @@ mod tests {
             "Required size for encryptiong less than a block should be a block"
         );
         let output_stop = output_start + req_size_finish;
-        let output_slice = DataToProcess::Slice(&mut output_data[output_start..output_stop]);
-        let finish_written_bytes = op.operation(None, output_slice, true).expect("couldn't finish");
+        let mut output_slice =
+            DataToProcess::new_from_slice(&mut output_data[output_start..output_stop]);
+        let finish_written_bytes =
+            op.operation(None, &mut output_slice, true).expect("couldn't finish");
         expect_eq!(finish_written_bytes, 16, "With padding we should have written a block");
         total_encryption_size += finish_written_bytes;
         output_data.truncate(total_encryption_size);
@@ -594,51 +812,56 @@ mod tests {
         let mut op =
             CryptographicOperation::new_binder(&op_params).expect("couldn't create aes operation");
         let mut decrypted_data = vec![0; total_encryption_size];
-        let output_slice = DataToProcess::Slice(&mut output_data[..4]);
+        let mut output_slice = DataToProcess::new_from_slice(&mut output_data[..4]);
         let req_size = op
             .get_operation_req_size(Some(&output_slice), false)
             .expect("couldn't get required_size");
         expect_eq!(req_size, 16, "worse case space for this size of input is a block");
-        let decrypted_slice = DataToProcess::Slice(&mut decrypted_data[..16]);
-        let written_bytes =
-            op.operation(Some(output_slice), decrypted_slice, false).expect("couldn't update");
+        let mut decrypted_slice = DataToProcess::new_from_slice(&mut decrypted_data[..16]);
+        let written_bytes = op
+            .operation(Some(&mut output_slice), &mut decrypted_slice, false)
+            .expect("couldn't update");
         decrypted_data_size += written_bytes;
         expect_eq!(written_bytes, 0, "No bytes should have been written");
-        let output_slice = DataToProcess::Slice(&mut output_data[4..32]);
+        let mut output_slice = DataToProcess::new_from_slice(&mut output_data[4..32]);
         let req_size = op
             .get_operation_req_size(Some(&output_slice), false)
             .expect("couldn't get required_size");
         expect_eq!(req_size, 32, "worse case space for this size of input is 2 blocks");
-        let decrypted_slice = DataToProcess::Slice(&mut decrypted_data[..32]);
-        let written_bytes =
-            op.operation(Some(output_slice), decrypted_slice, false).expect("couldn't update");
+        let mut decrypted_slice = DataToProcess::new_from_slice(&mut decrypted_data[..32]);
+        let written_bytes = op
+            .operation(Some(&mut output_slice), &mut decrypted_slice, false)
+            .expect("couldn't update");
         decrypted_data_size += written_bytes;
         expect_eq!(written_bytes, 16, "One block should have been written");
-        let output_slice = DataToProcess::Slice(&mut output_data[32..50]);
+        let mut output_slice = DataToProcess::new_from_slice(&mut output_data[32..50]);
         let req_size = op
             .get_operation_req_size(Some(&output_slice), false)
             .expect("couldn't get required_size");
         expect_eq!(req_size, 32, "worse case space for this size of input is 2 blocks");
-        let decrypted_slice = DataToProcess::Slice(&mut decrypted_data[16..48]);
-        let written_bytes =
-            op.operation(Some(output_slice), decrypted_slice, false).expect("couldn't update");
+        let mut decrypted_slice = DataToProcess::new_from_slice(&mut decrypted_data[16..48]);
+        let written_bytes = op
+            .operation(Some(&mut output_slice), &mut decrypted_slice, false)
+            .expect("couldn't update");
         decrypted_data_size += written_bytes;
         expect_eq!(written_bytes, 32, "Two block should have been written");
-        let output_slice = DataToProcess::Slice(&mut output_data[50..64]);
+        let mut output_slice = DataToProcess::new_from_slice(&mut output_data[50..64]);
         let req_size = op
             .get_operation_req_size(Some(&output_slice), false)
             .expect("couldn't get required_size");
         expect_eq!(req_size, 16, "worse case space for this size of input is 1 block");
-        let decrypted_slice = DataToProcess::Slice(&mut decrypted_data[48..64]);
-        let written_bytes =
-            op.operation(Some(output_slice), decrypted_slice, false).expect("couldn't update");
+        let mut decrypted_slice = DataToProcess::new_from_slice(&mut decrypted_data[48..64]);
+        let written_bytes = op
+            .operation(Some(&mut output_slice), &mut decrypted_slice, false)
+            .expect("couldn't update");
         decrypted_data_size += written_bytes;
         expect_eq!(written_bytes, 0, "No blocks should have been written");
         let req_size_finish =
             op.get_operation_req_size(None, true).expect("couldn't get required_size");
         expect_eq!(req_size_finish, 16, "Max size required to finish should be 1 block");
-        let decrypted_slice = DataToProcess::Slice(&mut decrypted_data[48..64]);
-        let total_finish_size = op.operation(None, decrypted_slice, true).expect("couldn't finish");
+        let mut decrypted_slice = DataToProcess::new_from_slice(&mut decrypted_data[48..64]);
+        let total_finish_size =
+            op.operation(None, &mut decrypted_slice, true).expect("couldn't finish");
         decrypted_data_size += total_finish_size;
         decrypted_data.truncate(decrypted_data_size);
         let decrypted_msg =
