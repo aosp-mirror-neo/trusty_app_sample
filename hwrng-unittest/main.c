@@ -80,6 +80,7 @@ TEST(hwrng, var_rng_req_test) {
     }
 }
 
+#if !WITHOUT_HWRNG_FORWARD_TEST
 /*
  * This Test is NOT intended as a replacement for a proper NIST SP 800-22
  * certification suites. It only attempts to detect detect gross misbehaviors of
@@ -167,6 +168,8 @@ TEST(hwrng, cumulative_sums_forward_test) {
             ret, NO_ERROR,
             "NIST 800-22 - Section 2.13.5 criteria not met after 3 attempts.");
 }
+
+#endif
 
 TEST(hwrng, stats_test) {
     int rc;
