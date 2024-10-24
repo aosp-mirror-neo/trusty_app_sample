@@ -24,6 +24,6 @@ MODULE_CRATE_NAME := staticlib_test
 MODULE_RUST_CRATE_TYPES := staticlib
 
 MODULE_LIBRARY_DEPS += \
-	external/rust/crates/zerocopy-derive
+	$(call FIND_CRATE,zerocopy-derive)
 
 include make/library.mk

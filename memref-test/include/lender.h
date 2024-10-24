@@ -28,11 +28,16 @@ enum lender_command {
 };
 
 struct lender_region {
-    size_t offset;
-    size_t size;
+    uint64_t offset;
+    uint64_t size;
 };
 
+/**
+ * struct lender_msg - lend command
+ * @cmd:     command identifier, one of &enum lender_command
+ * @region:  region to operate on
+ */
 struct lender_msg {
-    enum lender_command cmd;
+    uint64_t cmd;
     struct lender_region region;
 };
