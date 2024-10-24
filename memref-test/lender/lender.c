@@ -195,7 +195,7 @@ static int lender_on_message(const struct tipc_port* port,
         }
         break;
     default:
-        TLOGE("Bad command: %d\n", msg.cmd);
+        TLOGE("Bad command: %" PRIu64 "\n", msg.cmd);
         return -1;
     }
 
