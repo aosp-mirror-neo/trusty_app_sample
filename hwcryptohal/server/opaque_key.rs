@@ -770,7 +770,7 @@ impl OpaqueKey {
         Ok(OpaqueKey { key_header, key_material, key_in_owner_control: self.key_in_owner_control })
     }
 
-    fn new_opaque_key_from_raw_bytes(
+    pub(crate) fn new_opaque_key_from_raw_bytes(
         policy: &KeyPolicy,
         key_material: Vec<u8>,
         connection_info: Uuid,

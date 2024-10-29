@@ -26,7 +26,7 @@ use android_hardware_security_see::aidl::android::hardware::security::see::hwcry
         BnHwCryptoKey, DerivedKey::DerivedKey, DerivedKeyParameters::DerivedKeyParameters,
         DerivedKeyPolicy::DerivedKeyPolicy, DeviceKeyId::DeviceKeyId,
         DiceBoundDerivationKey::DiceBoundDerivationKey, DiceBoundKeyResult::DiceBoundKeyResult,
-        DiceCurrentBoundKeyResult::DiceCurrentBoundKeyResult, IHwCryptoKey,
+        DiceCurrentBoundKeyResult::DiceCurrentBoundKeyResult, IHwCryptoKey, KeySlot::KeySlot,
     },
     IHwCryptoOperations::IHwCryptoOperations,
     IOpaqueKey::IOpaqueKey,
@@ -273,6 +273,15 @@ impl HwCryptoKey {
             )),
         }
     }
+
+    fn check_caller_can_access_keyslot(&self, _keyslot: KeySlot) -> Result<(), HwCryptoError> {
+        // Simple uuid check for host uuid until we have DICE
+        if self.uuid.to_string() == "00000000-0000-0000-0000-000000000000" {
+            Err(hwcrypto_err!(UNAUTHORIZED, "caller do not have permission to access this key"))
+        } else {
+            Ok(())
+        }
+    }
 }
 
 impl IHwCryptoKey for HwCryptoKey {
@@ -393,6 +402,31 @@ impl IHwCryptoKey for HwCryptoKey {
     ) -> binder::Result<binder::Strong<dyn IOpaqueKey>> {
         let key_material = helpers::aidl_explicit_key_to_rust_key_material(key_to_be_imported)?;
         Ok(OpaqueKey::import_key_material(new_key_policy, key_material, self.uuid.clone())?)
+    }
+
+    fn getKeyslotData(&self, keyslot: KeySlot) -> binder::Result<binder::Strong<dyn IOpaqueKey>> {
+        self.check_caller_can_access_keyslot(keyslot)?;
+        match keyslot {
+            KeySlot::KEYMINT_SHARED_HMAC_KEY => {
+                let key_generator =
+                    EncryptionHeader::generate_with_version(0, EncryptedContent::KeyMaterial);
+                let mock_hmac_key = key_generator.derive_raw_service_encryption_key(
+                    EncryptionHeaderKey::KeyGenerationContext(b"hmac_key_ctx"),
+                )?;
+                let policy = KeyPolicy {
+                    usage: KeyUse::SIGN,
+                    keyLifetime: KeyLifetime::HARDWARE,
+                    keyPermissions: Vec::new(),
+                    keyType: KeyType::HMAC_SHA256,
+                    keyManagementKey: false,
+                };
+                OpaqueKey::new_opaque_key_from_raw_bytes(&policy, mock_hmac_key, self.uuid.clone())
+            }
+            _ => Err(binder::Status::new_exception_str(
+                binder::ExceptionCode::UNSUPPORTED_OPERATION,
+                Some("Unknown key slot requested"),
+            )),
+        }
     }
 }
 
@@ -707,5 +741,24 @@ mod tests {
 
         let key = hw_key.keyTokenImport(&token, &bad_dice_policy);
         expect!(key.is_err(), "shouldn't be able to import key using the wrong DICE policy");
+    }
+
+    #[test]
+    fn get_keyslot() {
+        let hw_key: Strong<dyn IHwCryptoKey> =
+            RpcSession::new().setup_trusty_client(RUST_SERVICE_PORT).expect("Failed to connect");
+
+        let key = hw_key.getKeyslotData(KeySlot::KEYMINT_SHARED_HMAC_KEY);
+        expect!(key.is_ok(), "couldn't get key");
+    }
+
+    #[test]
+    fn get_keyslot_form_unautorized_caller() {
+        let hw_key = HwCryptoKey::new_binder(
+            Uuid::new_from_string("00000000-0000-0000-0000-000000000000")
+                .expect("couldn't create uuid"),
+        );
+        let key = hw_key.getKeyslotData(KeySlot::KEYMINT_SHARED_HMAC_KEY);
+        expect!(key.is_err(), "shouldn't be able to get key");
     }
 }
