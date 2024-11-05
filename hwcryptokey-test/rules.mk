@@ -30,7 +30,7 @@ MODULE_LIBRARY_DEPS += \
 	trusty/user/app/sample/hwcryptohal/aidl/rust  \
 	trusty/user/app/sample/hwcryptohal/common \
 	trusty/user/base/lib/trusty-std \
-	external/rust/crates/log \
+	$(call FIND_CRATE,log) \
 
 MODULE_RUST_TESTS := true
 
