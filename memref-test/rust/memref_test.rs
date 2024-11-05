@@ -62,7 +62,10 @@ fn request_remote_buf(lender: &Handle) -> Handle {
     // Send a command to the lender service telling it we want to receive a shared
     // memory buffer.
     lender
-        .send(&lender_msg { cmd: sys::lender_command_LENDER_LEND_BSS, region: Default::default() })
+        .send(&lender_msg {
+            cmd: sys::lender_command_LENDER_LEND_BSS as u64,
+            region: Default::default(),
+        })
         .unwrap();
 
     // Receive the memref from the lender service.
@@ -88,7 +91,7 @@ fn test_read_write(lender: &Handle, remote_buf: UnsafeSharedBuf) {
 
     lender
         .send(&lender_msg {
-            cmd: sys::lender_command_LENDER_READ_BSS,
+            cmd: sys::lender_command_LENDER_READ_BSS as u64,
             region: lender_region { offset: 0, size: 1 },
         })
         .unwrap();
@@ -105,7 +108,7 @@ fn test_read_write(lender: &Handle, remote_buf: UnsafeSharedBuf) {
     lender
         .send(&WriteRequest {
             msg: lender_msg {
-                cmd: sys::lender_command_LENDER_WRITE_BSS,
+                cmd: sys::lender_command_LENDER_WRITE_BSS as u64,
                 region: lender_region { offset: 1, size: 1 },
             },
             value: 123,
