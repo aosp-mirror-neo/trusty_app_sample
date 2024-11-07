@@ -17,8 +17,8 @@
 //! HwCrypto error handling code and related structures
 
 use alloc::{collections::TryReserveError, ffi::CString};
-pub use android_hardware_security_see::aidl::android::hardware::security::see::hwcrypto::types::HalErrorCode;
-use android_hardware_security_see::binder;
+pub use android_hardware_security_see_hwcrypto::aidl::android::hardware::security::see::hwcrypto::types::HalErrorCode;
+use android_hardware_security_see_hwcrypto::binder;
 use core::array::TryFromSliceError;
 use coset::CoseError;
 use std::sync::PoisonError;
