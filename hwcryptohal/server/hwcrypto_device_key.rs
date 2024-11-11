@@ -186,7 +186,6 @@ impl AsCborValue for VersionContext {
 /// The `IHwCryptoKey` implementation.
 #[derive(Debug)]
 pub struct HwCryptoKey {
-    #[allow(dead_code)]
     uuid: Uuid,
 }
 
@@ -248,7 +247,7 @@ impl HwCryptoKey {
                 };
                 // Create a new opaque key from the generated key material
                 let km = opaque_key::generate_key_material(&policy.keyType, Some(derived_key))?;
-                let key = opaque_key::OpaqueKey::new_binder(&policy, km)
+                let key = opaque_key::OpaqueKey::new_binder(&policy, km, self.uuid.clone())
                     .map_err(|e| hwcrypto_err!(GENERIC_ERROR, "failed to create key {:?}", e))?;
                 let dice_policy_current =
                     VersionContext::is_context_current(dice_policy_for_key_version)?;
@@ -326,8 +325,11 @@ impl IHwCryptoKey for HwCryptoKey {
                 Ok(DerivedKey::ExplicitKey(derived_key))
             }
             DerivedKeyPolicy::OpaqueKey(key_policy) => {
-                let derived_key =
-                    derivation_key.derive_opaque_key(key_policy, parameters.context.as_slice())?;
+                let derived_key = derivation_key.derive_opaque_key(
+                    key_policy,
+                    parameters.context.as_slice(),
+                    self.uuid.clone(),
+                )?;
                 Ok(DerivedKey::Opaque(Some(derived_key)))
             }
         }
@@ -343,7 +345,7 @@ impl IHwCryptoKey for HwCryptoKey {
         new_key_policy: &KeyPolicy,
     ) -> binder::Result<binder::Strong<dyn IOpaqueKey>> {
         let key_material = helpers::aidl_explicit_key_to_rust_key_material(key_to_be_imported)?;
-        Ok(OpaqueKey::import_key_material(new_key_policy, key_material)?)
+        Ok(OpaqueKey::import_key_material(new_key_policy, key_material, self.uuid.clone())?)
     }
 }
 
