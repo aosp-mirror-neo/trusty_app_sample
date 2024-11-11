@@ -831,7 +831,12 @@ mod tests {
     use std::alloc::{alloc_zeroed, dealloc, Layout};
     use std::os::fd::{FromRawFd, OwnedFd};
     use test::{expect, expect_eq};
+    use tipc::Uuid;
 
+    fn connection_info() -> Uuid {
+        // TODO: This is a temporary mock function for testing until we move to use DICE policies.
+        Uuid::new_from_string("f41a7796-975a-4279-8cc4-b73f8820430d").unwrap()
+    }
     /// Structure only intended to use on unit tests. It will allocate a single memory page and
     /// create a memref to it.
     struct TestPageAllocator {
@@ -1171,7 +1176,7 @@ mod tests {
             keyType: KeyType::AES_128_CBC_NO_PADDING,
             keyManagementKey: false,
         };
-        let key = OpaqueKey::generate_opaque_key(&policy);
+        let key = OpaqueKey::generate_opaque_key(&policy, connection_info());
         expect!(key.is_ok(), "couldn't generate key");
         let key = key.unwrap();
         let mode = SymmetricCryptoParameters::Aes(AesCipherMode::Cbc(CipherModeParameters {
@@ -1413,7 +1418,8 @@ mod tests {
             keyType: key_type,
             keyManagementKey: false,
         };
-        let key = OpaqueKey::generate_opaque_key(&policy).expect("couldn't generate key");
+        let key = OpaqueKey::generate_opaque_key(&policy, connection_info())
+            .expect("couldn't generate key");
         let nonce = [0u8; 16];
         let parameters = SymmetricCryptoParameters::Aes(AesCipherMode::Cbc(CipherModeParameters {
             nonce: nonce.into(),
@@ -1739,7 +1745,8 @@ mod tests {
             keyType: key_type,
             keyManagementKey: false,
         };
-        let key = OpaqueKey::generate_opaque_key(&policy).expect("couldn't generate key");
+        let key = OpaqueKey::generate_opaque_key(&policy, connection_info())
+            .expect("couldn't generate key");
         let nonce = [0u8; 16];
         let parameters = SymmetricCryptoParameters::Aes(AesCipherMode::Cbc(CipherModeParameters {
             nonce: nonce.into(),
@@ -1838,7 +1845,8 @@ mod tests {
             keyType: KeyType::AES_128_CBC_PKCS7_PADDING,
             keyManagementKey: false,
         };
-        let key = OpaqueKey::generate_opaque_key(&policy).expect("couldn't generate key");
+        let key = OpaqueKey::generate_opaque_key(&policy, connection_info())
+            .expect("couldn't generate key");
         let nonce = [0u8; 16];
         let parameters = SymmetricCryptoParameters::Aes(AesCipherMode::Cbc(CipherModeParameters {
             nonce: nonce.into(),
@@ -1865,7 +1873,8 @@ mod tests {
             keyType: KeyType::AES_256_CBC_NO_PADDING,
             keyManagementKey: false,
         };
-        let key = OpaqueKey::generate_opaque_key(&policy).expect("couldn't generate key");
+        let key = OpaqueKey::generate_opaque_key(&policy, connection_info())
+            .expect("couldn't generate key");
         let parameters = SymmetricCryptoParameters::Aes(AesCipherMode::Cbc(CipherModeParameters {
             nonce: nonce.into(),
         }));
@@ -1895,7 +1904,8 @@ mod tests {
             keyType: key_type,
             keyManagementKey: false,
         };
-        let key = OpaqueKey::generate_opaque_key(&policy).expect("couldn't generate key");
+        let key = OpaqueKey::generate_opaque_key(&policy, connection_info())
+            .expect("couldn't generate key");
         let nonce = [0u8; 16];
         let parameters = SymmetricCryptoParameters::Aes(AesCipherMode::Cbc(CipherModeParameters {
             nonce: nonce.into(),
