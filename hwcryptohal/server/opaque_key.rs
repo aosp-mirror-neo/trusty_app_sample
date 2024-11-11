@@ -29,17 +29,21 @@ use android_hardware_security_see::binder;
 use binder::binder_impl::Binder;
 use ciborium::Value;
 use core::fmt;
-use coset::CborSerializable;
+use coset::{AsCborValue, CborSerializable, CoseError};
 use hwcryptohal_common::{
+    cose_enum_gen,
     err::HwCryptoError,
     hwcrypto_err,
-    policy::{self, KeyLifetimeSerializable, KeyTypeSerializable, KeyUseSerializable},
+    policy::{
+        self, cbor_policy_to_aidl, cbor_serialize_key_policy, KeyLifetimeSerializable,
+        KeyTypeSerializable, KeyUseSerializable,
+    },
 };
 use kmr_common::{
     crypto::{self, Aes, CurveType, Hkdf, Hmac, KeyMaterial, OpaqueOr, Rng},
     explicit, FallibleAllocExt,
 };
-use kmr_wire::keymint::EcCurve;
+use kmr_wire::{keymint::EcCurve, AsCborValue as _};
 use std::sync::OnceLock;
 use tipc::Uuid;
 
@@ -203,6 +207,15 @@ impl KeyHeader {
     }
 }
 
+cose_enum_gen! {
+    enum OpaqueKeyCoseLabels {
+        KeyMaterial = -66000,
+        KeyPolicy = -66001,
+        BootValue = -66002,
+        ConnectionInfoCreator = -66003,
+    }
+}
+
 /// `IOpaqueKey` implementation.
 pub struct OpaqueKey {
     pub(crate) key_header: KeyHeader,
@@ -226,6 +239,84 @@ impl TryFrom<&binder::Strong<dyn IOpaqueKey>> for OpaqueKey {
             Some(key) => key.try_clone(),
             None => Err(hwcrypto_err!(UNSUPPORTED, "couldn't cast back key")),
         }
+    }
+}
+
+impl AsCborValue for OpaqueKey {
+    fn to_cbor_value(self) -> Result<Value, CoseError> {
+        let mut cbor_map = Vec::<(Value, Value)>::new();
+        cbor_map.try_reserve(4).map_err(|_| CoseError::EncodeFailed)?;
+        let key = Value::Integer((OpaqueKeyCoseLabels::KeyPolicy as i64).into());
+        let key_policy = self.getKeyPolicy().map_err(|_| CoseError::EncodeFailed)?;
+        let cbor_key_policy =
+            cbor_serialize_key_policy(&key_policy).map_err(|_| CoseError::EncodeFailed)?;
+        cbor_map.push((key, Value::Bytes(cbor_key_policy)));
+        let key = Value::Integer((OpaqueKeyCoseLabels::KeyMaterial as i64).into());
+        cbor_map
+            .push((key, self.key_material.to_cbor_value().map_err(|_| CoseError::EncodeFailed)?));
+        let key = Value::Integer((OpaqueKeyCoseLabels::ConnectionInfoCreator as i64).into());
+        cbor_map.push((key, Value::Text(self.connection_info_at_creation.to_string())));
+        let key = Value::Integer((OpaqueKeyCoseLabels::BootValue as i64).into());
+        let mut boot_value = Vec::new();
+        boot_value
+            .try_reserve(self.key_header.boot_unique_value.0.len())
+            .map_err(|_| CoseError::EncodeFailed)?;
+        boot_value.extend_from_slice(&self.key_header.boot_unique_value.0);
+        cbor_map.push((key, Value::Bytes(boot_value)));
+        Ok(Value::Map(cbor_map))
+    }
+
+    fn from_cbor_value(value: Value) -> Result<Self, CoseError> {
+        let opaque_key_map = value.into_map().map_err(|_| CoseError::ExtraneousData)?;
+        if opaque_key_map.len() != 4 {
+            return Err(CoseError::ExtraneousData);
+        }
+        let mut key_material: Option<KeyMaterial> = None;
+        let mut key_policy: Option<KeyPolicy> = None;
+        let mut boot_value: Option<BootUniqueValue> = None;
+        let mut connection_info_at_creation: Option<Uuid> = None;
+        for (map_key, map_val) in opaque_key_map {
+            match map_key {
+                Value::Integer(key) => match key.try_into()? {
+                    OpaqueKeyCoseLabels::KeyMaterial => {
+                        key_material = Some(
+                            KeyMaterial::from_cbor_value(map_val)
+                                .map_err(|_| CoseError::EncodeFailed)?,
+                        )
+                    }
+                    OpaqueKeyCoseLabels::KeyPolicy => {
+                        let policy_bytes = map_val.as_bytes().ok_or(CoseError::EncodeFailed)?;
+                        key_policy = Some(
+                            cbor_policy_to_aidl(policy_bytes.as_slice())
+                                .map_err(|_| CoseError::EncodeFailed)?,
+                        )
+                    }
+                    OpaqueKeyCoseLabels::ConnectionInfoCreator => {
+                        let uuid_str = map_val.as_text().ok_or(CoseError::EncodeFailed)?;
+                        connection_info_at_creation = Some(
+                            Uuid::new_from_string(uuid_str).map_err(|_| CoseError::EncodeFailed)?,
+                        );
+                    }
+                    OpaqueKeyCoseLabels::BootValue => {
+                        let boot_value_bytes = map_val.as_bytes().ok_or(CoseError::EncodeFailed)?;
+                        boot_value = Some(BootUniqueValue(
+                            (boot_value_bytes.clone())
+                                .try_into()
+                                .map_err(|_| CoseError::EncodeFailed)?,
+                        ))
+                    }
+                },
+                _ => return Err(CoseError::ExtraneousData),
+            }
+        }
+        let key_material = key_material.ok_or(CoseError::EncodeFailed)?;
+        let key_policy = key_policy.ok_or(CoseError::EncodeFailed)?;
+        let boot_value = boot_value.ok_or(CoseError::EncodeFailed)?;
+        let connection_info_at_creation =
+            connection_info_at_creation.ok_or(CoseError::EncodeFailed)?;
+        let key_header = KeyHeader::new_with_boot_value(&key_policy, boot_value)
+            .map_err(|_| CoseError::EncodeFailed)?;
+        Ok(OpaqueKey { key_material, key_header, connection_info_at_creation })
     }
 }
 
