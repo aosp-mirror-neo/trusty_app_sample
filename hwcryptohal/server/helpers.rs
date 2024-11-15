@@ -25,6 +25,7 @@ use hwcryptohal_common::{err::HwCryptoError, hwcrypto_err};
 use kmr_common::crypto::{
     self, aes, KeyMaterial, OpaqueOr, SymmetricOperation as KmSymmetricOperation,
 };
+use kmr_wire::keymint;
 
 use crate::opaque_key::OpaqueKey;
 
@@ -49,6 +50,14 @@ pub(crate) fn symmetric_encryption_block_based(
             AesCipherMode::Ctr(_) => Ok(false),
             _ => Ok(true),
         },
+    }
+}
+
+pub(crate) fn aidl_to_rust_digest(key_type: &KeyType) -> Result<keymint::Digest, HwCryptoError> {
+    match *key_type {
+        KeyType::HMAC_SHA256 => Ok(keymint::Digest::Sha256),
+        KeyType::HMAC_SHA512 => Ok(keymint::Digest::Sha512),
+        _ => Err(hwcrypto_err!(UNSUPPORTED, "unsupported key type to get digest: {:?}", key_type)),
     }
 }
 
