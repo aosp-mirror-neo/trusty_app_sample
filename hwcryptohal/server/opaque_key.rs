@@ -16,10 +16,12 @@
 
 //! Implementation of the `IOpaqueKey` AIDL interface. It is used as a handle to key material
 
+use alloc::collections::btree_map::BTreeMap;
 use android_hardware_security_see::aidl::android::hardware::security::see::hwcrypto::types::{
     AesCipherMode::AesCipherMode, KeyLifetime::KeyLifetime, KeyPermissions::KeyPermissions,
-    KeyType::KeyType, KeyUse::KeyUse, OpaqueKeyToken::OpaqueKeyToken,
-    SymmetricCryptoParameters::SymmetricCryptoParameters, SymmetricOperation::SymmetricOperation,
+    KeyType::KeyType, KeyUse::KeyUse, OpaqueKeyToken::OpaqueKeyToken, OperationType::OperationType,
+    ProtectionId::ProtectionId, SymmetricCryptoParameters::SymmetricCryptoParameters,
+    SymmetricOperation::SymmetricOperation,
 };
 use android_hardware_security_see::aidl::android::hardware::security::see::hwcrypto::{
     IHwCryptoKey::{
@@ -35,7 +37,7 @@ use ciborium::Value;
 use core::fmt;
 use coset::{AsCborValue, CborSerializable, CoseError};
 use hwcryptohal_common::{
-    cose_enum_gen,
+    aidl_enum_wrapper, cose_enum_gen,
     err::HwCryptoError,
     hwcrypto_err,
     policy::{
@@ -48,7 +50,7 @@ use kmr_common::{
     explicit, FallibleAllocExt,
 };
 use kmr_wire::{keymint::EcCurve, AsCborValue as _};
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
 use tipc::Uuid;
 
 use crate::crypto_provider;
@@ -202,21 +204,185 @@ impl KeyHeaderPolicy {
     }
 }
 
-#[allow(unused)]
+fn check_protection_id_settings(
+    protection_id: &ProtectionIdSerializable,
+    settings: &ProtectionSetting,
+) -> Result<bool, HwCryptoError> {
+    match protection_id.0 {
+        ProtectionId::WIDEVINE_OUTPUT_BUFFER => {
+            // For Widevine buffers we cannot create a key that can read into this area
+            Ok(!settings.read_protection)
+        }
+        _ => Err(hwcrypto_err!(BAD_PARAMETER, "unsupported protection_id {:?}", protection_id,)),
+    }
+}
+
 #[derive(Debug)]
 struct KeyHeaderMetadata {
     expiration_time: Option<u64>,
+    protection_id_settings: BTreeMap<ProtectionIdSerializable, ProtectionSetting>,
 }
 
 impl KeyHeaderMetadata {
     fn new() -> Self {
-        Self { expiration_time: None }
+        Self { expiration_time: None, protection_id_settings: BTreeMap::new() }
     }
 
     // While the current metadata definition wouldn't fail on this operation, we are doing this
     // division to add an element to metadata that could fail while ying to clone
     fn try_clone(&self) -> Result<Self, HwCryptoError> {
-        Ok(Self { expiration_time: None })
+        let mut protection_id_settings = BTreeMap::new();
+        protection_id_settings.extend(self.protection_id_settings.iter());
+        Ok(Self { expiration_time: None, protection_id_settings })
+    }
+
+    fn add_protection_id(
+        &mut self,
+        protection_id: ProtectionId,
+        allowed_operations: &[OperationType],
+    ) -> Result<(), HwCryptoError> {
+        if allowed_operations.is_empty() {
+            return Err(hwcrypto_err!(
+                BAD_PARAMETER,
+                "didn't receive any allowed operations for add_protection_id",
+            ));
+        }
+        let protection_id = ProtectionIdSerializable::try_from(protection_id)?;
+        if !self.protection_id_settings.contains_key(&protection_id) {
+            return Err(hwcrypto_err!(
+                BAD_PARAMETER,
+                "settings for protection id {:?} have already been set",
+                protection_id
+            ));
+        }
+        let mut protection_setting =
+            ProtectionSetting { write_protection: false, read_protection: false };
+        for operation in allowed_operations {
+            match *operation {
+                OperationType::READ => protection_setting.read_protection = true,
+                OperationType::WRITE => protection_setting.write_protection = true,
+                _ => {
+                    return Err(hwcrypto_err!(
+                        BAD_PARAMETER,
+                        "received unsupported OperationType {:?}",
+                        operation
+                    ))
+                }
+            }
+        }
+        if !check_protection_id_settings(&protection_id, &protection_setting)? {
+            return Err(hwcrypto_err!(
+                BAD_PARAMETER,
+                "unsupported setting for permissions {:?}: {:?}",
+                protection_id,
+                protection_setting
+            ));
+        }
+        self.protection_id_settings.insert(protection_id, protection_setting);
+        Ok(())
+    }
+
+    fn get_metadata_as_cbor(&self) -> Result<Value, HwCryptoError> {
+        let mut cbor_map = Vec::<(Value, Value)>::new();
+        cbor_map.try_reserve(2)?;
+
+        // Adding expiration time
+        let expiration_time_value = if let Some(expiration_time) = self.expiration_time {
+            Value::Integer(expiration_time.into())
+        } else {
+            Value::Null
+        };
+        let key = Value::Integer((KeyMetadataCoseLabels::KeyExpirationPeriod as i64).into());
+        cbor_map.push((key, expiration_time_value));
+
+        // Adding protection IDs
+        let mut protection_id_cbor_map = Vec::<(Value, Value)>::new();
+        protection_id_cbor_map.try_reserve(self.protection_id_settings.len())?;
+        for (protection_id, protection_id_setting) in &self.protection_id_settings {
+            let protection_id_key = ciborium::Value::Integer((*protection_id).into());
+            protection_id_cbor_map.push((
+                protection_id_key,
+                protection_id_setting.to_cbor_value().map_err(|_| {
+                    hwcrypto_err!(
+                        BAD_PARAMETER,
+                        "couldn't get cbor representation of protection id setting"
+                    )
+                })?,
+            ))
+        }
+        let key = Value::Integer((KeyMetadataCoseLabels::ProtectionIdSettings as i64).into());
+        cbor_map.push((key, ciborium::Value::Map(protection_id_cbor_map)));
+        Ok(Value::Map(cbor_map))
+    }
+
+    fn set_metadata_from_cbor(&mut self, metadata_as_cbor: Value) -> Result<(), HwCryptoError> {
+        let metadata = metadata_as_cbor
+            .into_map()
+            .map_err(|_| hwcrypto_err!(BAD_PARAMETER, "received cbor wasn't a map"))?;
+
+        let mut protection_id_settings: Option<
+            BTreeMap<ProtectionIdSerializable, ProtectionSetting>,
+        > = None;
+        let mut expiration_time: Option<Option<u64>> = None;
+
+        for (map_key, map_val) in metadata {
+            let key = map_key
+                .into_integer()
+                .map_err(|_| hwcrypto_err!(BAD_PARAMETER, "received map key wasn't an integer"))?;
+            match key.try_into()? {
+                KeyMetadataCoseLabels::KeyExpirationPeriod => {
+                    expiration_time = if map_val.is_null() {
+                        Some(None)
+                    } else {
+                        let value = map_val
+                            .into_integer()
+                            .map_err(|_| {
+                                hwcrypto_err!(BAD_PARAMETER, "protection id key wasn't an integer")
+                            })?
+                            .try_into()
+                            .map_err(|_| {
+                                hwcrypto_err!(BAD_PARAMETER, "couldn't decode expiration time")
+                            })?;
+                        Some(Some(value))
+                    }
+                }
+                KeyMetadataCoseLabels::ProtectionIdSettings => {
+                    let mut settings = BTreeMap::new();
+                    for (protection_id, protection_setting) in map_val
+                        .into_map()
+                        .map_err(|_| hwcrypto_err!(BAD_PARAMETER, "received cbor wasn't a map"))?
+                    {
+                        //settings.try_reserve(1).map_err(|_| CoseError::EncodeFailed)?;
+                        let protection_id: ProtectionIdSerializable = protection_id
+                            .into_integer()
+                            .map_err(|_| {
+                                hwcrypto_err!(BAD_PARAMETER, "protection id key wasn't an integer")
+                            })?
+                            .try_into()
+                            .map_err(|_| {
+                                hwcrypto_err!(BAD_PARAMETER, "couldn't decode protection ID")
+                            })?;
+                        let protection_setting =
+                            ProtectionSetting::from_cbor_value(protection_setting)?;
+                        if settings.contains_key(&protection_id) {
+                            return Err(hwcrypto_err!(
+                                BAD_PARAMETER,
+                                "received duplicated protection ID entry"
+                            ));
+                        }
+                        settings.insert(protection_id, protection_setting);
+                    }
+                    protection_id_settings = Some(settings);
+                }
+            }
+        }
+        self.expiration_time = expiration_time
+            .ok_or(hwcrypto_err!(BAD_PARAMETER, "didn't find expiration time on metadata"))?;
+        self.protection_id_settings = protection_id_settings.ok_or(hwcrypto_err!(
+            BAD_PARAMETER,
+            "didn't find protection_ id settings on metadata"
+        ))?;
+        Ok(())
     }
 }
 
@@ -226,7 +392,7 @@ impl KeyHeaderMetadata {
 pub(crate) struct KeyHeader {
     boot_unique_value: BootUniqueValue,
     key_policy: KeyHeaderPolicy,
-    key_metadata: KeyHeaderMetadata,
+    key_metadata: Mutex<KeyHeaderMetadata>,
 }
 
 impl KeyHeader {
@@ -240,7 +406,7 @@ impl KeyHeader {
         boot_unique_value: BootUniqueValue,
     ) -> Result<Self, HwCryptoError> {
         let key_policy = KeyHeaderPolicy::new(policy)?;
-        let key_metadata = KeyHeaderMetadata::new();
+        let key_metadata = Mutex::new(KeyHeaderMetadata::new());
         Ok(Self { boot_unique_value, key_policy, key_metadata })
     }
 
@@ -250,8 +416,20 @@ impl KeyHeader {
 
     fn try_clone(&self) -> Result<Self, HwCryptoError> {
         let key_policy = self.key_policy.try_clone()?;
-        let key_metadata = self.key_metadata.try_clone()?;
-        Ok(Self { boot_unique_value: self.boot_unique_value.clone(), key_policy, key_metadata })
+        let key_metadata = self.key_metadata.lock()?.try_clone()?;
+        Ok(Self {
+            boot_unique_value: self.boot_unique_value.clone(),
+            key_policy,
+            key_metadata: Mutex::new(key_metadata),
+        })
+    }
+
+    fn get_metadata_as_cbor(&self) -> Result<Value, HwCryptoError> {
+        self.key_metadata.lock()?.get_metadata_as_cbor()
+    }
+
+    fn set_metadata_from_cbor(&mut self, metadata_as_cbor: Value) -> Result<(), HwCryptoError> {
+        self.key_metadata.lock()?.set_metadata_from_cbor(metadata_as_cbor)
     }
 }
 
@@ -260,6 +438,78 @@ cose_enum_gen! {
         KeyMaterial = -66000,
         KeyPolicy = -66001,
         BootValue = -66002,
+        KeyMetadata = -66003,
+    }
+}
+
+cose_enum_gen! {
+    enum ProtectionSettingsCoseLabels {
+        WriteProtection = -67000,
+        ReadProtection = -67001,
+    }
+}
+
+cose_enum_gen! {
+    enum KeyMetadataCoseLabels {
+        KeyExpirationPeriod = -68000,
+        ProtectionIdSettings = -68001,
+    }
+}
+
+aidl_enum_wrapper! {
+    aidl_name: ProtectionId,
+    wrapper_name: ProtectionIdSerializable,
+    fields: [WIDEVINE_OUTPUT_BUFFER]
+}
+
+#[derive(Debug, Copy, Clone)]
+struct ProtectionSetting {
+    write_protection: bool,
+    read_protection: bool,
+}
+
+impl AsCborValue for ProtectionSetting {
+    fn to_cbor_value(self) -> Result<Value, CoseError> {
+        let mut cbor_map = Vec::<(Value, Value)>::new();
+        cbor_map.try_reserve(2).map_err(|_| CoseError::EncodeFailed)?;
+
+        let key = Value::Integer((ProtectionSettingsCoseLabels::WriteProtection as i64).into());
+        let value = Value::Bool(self.write_protection.into());
+        cbor_map.push((key, value));
+
+        let key = Value::Integer((ProtectionSettingsCoseLabels::ReadProtection as i64).into());
+        let value = Value::Bool(self.read_protection.into());
+        cbor_map.push((key, value));
+
+        Ok(Value::Map(cbor_map))
+    }
+
+    fn from_cbor_value(value: Value) -> Result<Self, CoseError> {
+        let opaque_key_map = value.into_map().map_err(|_| CoseError::ExtraneousData)?;
+        if opaque_key_map.len() != 2 {
+            return Err(CoseError::ExtraneousData);
+        }
+
+        let mut write_protection: Option<bool> = None;
+        let mut read_protection: Option<bool> = None;
+        for (map_key, map_val) in opaque_key_map {
+            match map_key {
+                Value::Integer(key) => match key.try_into()? {
+                    ProtectionSettingsCoseLabels::WriteProtection => {
+                        write_protection = Some(map_val.as_bool().ok_or(CoseError::EncodeFailed)?);
+                    }
+                    ProtectionSettingsCoseLabels::ReadProtection => {
+                        read_protection = Some(map_val.as_bool().ok_or(CoseError::EncodeFailed)?);
+                    }
+                },
+                _ => return Err(CoseError::ExtraneousData),
+            }
+        }
+
+        let write_protection = write_protection.ok_or(CoseError::EncodeFailed)?;
+        let read_protection = read_protection.ok_or(CoseError::EncodeFailed)?;
+
+        Ok(Self { write_protection, read_protection })
     }
 }
 
@@ -308,15 +558,17 @@ impl TryFrom<&binder::Strong<dyn IOpaqueKey>> for OpaqueKey {
 impl AsCborValue for OpaqueKey {
     fn to_cbor_value(self) -> Result<Value, CoseError> {
         let mut cbor_map = Vec::<(Value, Value)>::new();
-        cbor_map.try_reserve(3).map_err(|_| CoseError::EncodeFailed)?;
+        cbor_map.try_reserve(4).map_err(|_| CoseError::EncodeFailed)?;
         let key = Value::Integer((OpaqueKeyCoseLabels::KeyPolicy as i64).into());
         let key_policy = self.getKeyPolicy().map_err(|_| CoseError::EncodeFailed)?;
         let cbor_key_policy =
             cbor_serialize_key_policy(&key_policy).map_err(|_| CoseError::EncodeFailed)?;
         cbor_map.push((key, Value::Bytes(cbor_key_policy)));
+
         let key = Value::Integer((OpaqueKeyCoseLabels::KeyMaterial as i64).into());
         cbor_map
             .push((key, self.key_material.to_cbor_value().map_err(|_| CoseError::EncodeFailed)?));
+
         let key = Value::Integer((OpaqueKeyCoseLabels::BootValue as i64).into());
         let mut boot_value = Vec::new();
         boot_value
@@ -324,17 +576,25 @@ impl AsCborValue for OpaqueKey {
             .map_err(|_| CoseError::EncodeFailed)?;
         boot_value.extend_from_slice(&self.key_header.boot_unique_value.0);
         cbor_map.push((key, Value::Bytes(boot_value)));
+
+        let key = Value::Integer((OpaqueKeyCoseLabels::KeyMetadata as i64).into());
+        cbor_map.push((
+            key,
+            self.key_header.get_metadata_as_cbor().map_err(|_| CoseError::EncodeFailed)?,
+        ));
+
         Ok(Value::Map(cbor_map))
     }
 
     fn from_cbor_value(value: Value) -> Result<Self, CoseError> {
         let opaque_key_map = value.into_map().map_err(|_| CoseError::ExtraneousData)?;
-        if opaque_key_map.len() != 3 {
+        if opaque_key_map.len() != 4 {
             return Err(CoseError::ExtraneousData);
         }
         let mut key_material: Option<KeyMaterial> = None;
         let mut key_policy: Option<KeyPolicy> = None;
         let mut boot_value: Option<BootUniqueValue> = None;
+        let mut key_metadata: Option<Value> = None;
         for (map_key, map_val) in opaque_key_map {
             match map_key {
                 Value::Integer(key) => match key.try_into()? {
@@ -359,6 +619,7 @@ impl AsCborValue for OpaqueKey {
                                 .map_err(|_| CoseError::EncodeFailed)?,
                         ))
                     }
+                    OpaqueKeyCoseLabels::KeyMetadata => key_metadata = Some(map_val),
                 },
                 _ => return Err(CoseError::ExtraneousData),
             }
@@ -366,8 +627,10 @@ impl AsCborValue for OpaqueKey {
         let key_material = key_material.ok_or(CoseError::EncodeFailed)?;
         let key_policy = key_policy.ok_or(CoseError::EncodeFailed)?;
         let boot_value = boot_value.ok_or(CoseError::EncodeFailed)?;
-        let key_header = KeyHeader::new_with_boot_value(&key_policy, boot_value)
+        let mut key_header = KeyHeader::new_with_boot_value(&key_policy, boot_value)
             .map_err(|_| CoseError::EncodeFailed)?;
+        let key_metadata = key_metadata.ok_or(CoseError::EncodeFailed)?;
+        key_header.set_metadata_from_cbor(key_metadata).map_err(|_| CoseError::EncodeFailed)?;
         Ok(OpaqueKey { key_material, key_header, key_in_owner_control: false })
     }
 }
@@ -697,6 +960,22 @@ impl OpaqueKey {
             },
         }
     }
+
+    fn add_protection_id(
+        &self,
+        protection_id: ProtectionId,
+        allowed_operations: &[OperationType],
+    ) -> Result<(), HwCryptoError> {
+        if !self.check_ownership() {
+            // We haven't created this key, so we cannot export it
+            // TODO: Change the error type to UNAUTORIZED
+            return Err(hwcrypto_err!(
+                GENERIC_ERROR,
+                "only the owner of a key can modify protection IDs"
+            ));
+        }
+        self.key_header.key_metadata.lock()?.add_protection_id(protection_id, allowed_operations)
+    }
 }
 
 impl binder::Interface for OpaqueKey {}
@@ -725,6 +1004,14 @@ impl IOpaqueKey for OpaqueKey {
 
     fn getShareableToken(&self, sealing_dice_policy: &[u8]) -> binder::Result<OpaqueKeyToken> {
         Ok(OpaqueKeyToken { keyToken: self.create_token(sealing_dice_policy)? })
+    }
+
+    fn setProtectionId(
+        &self,
+        protection_id: ProtectionId,
+        allowed_operations: &[OperationType],
+    ) -> Result<(), binder::Status> {
+        Ok(self.add_protection_id(protection_id, allowed_operations)?)
     }
 }
 
