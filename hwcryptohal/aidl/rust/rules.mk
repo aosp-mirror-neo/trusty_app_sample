@@ -52,6 +52,7 @@ MODULE_AIDLS := \
     $(HWCRYPTO_AIDL_DIR)/$(MODULE_AIDL_PACKAGE)/types/KeyType.aidl                          \
     $(HWCRYPTO_AIDL_DIR)/$(MODULE_AIDL_PACKAGE)/types/KeyUse.aidl                           \
     $(HWCRYPTO_AIDL_DIR)/$(MODULE_AIDL_PACKAGE)/types/MemoryBufferReference.aidl            \
+    $(HWCRYPTO_AIDL_DIR)/$(MODULE_AIDL_PACKAGE)/types/OpaqueKeyToken.aidl                   \
     $(HWCRYPTO_AIDL_DIR)/$(MODULE_AIDL_PACKAGE)/types/OperationData.aidl                    \
     $(HWCRYPTO_AIDL_DIR)/$(MODULE_AIDL_PACKAGE)/types/OperationType.aidl                    \
     $(HWCRYPTO_AIDL_DIR)/$(MODULE_AIDL_PACKAGE)/types/SymmetricAuthCryptoParameters.aidl    \
