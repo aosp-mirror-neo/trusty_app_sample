@@ -131,10 +131,10 @@ impl EncryptionHeader {
 
     // Function used to generate different device bound encryption keys tied to the HWCrypto service
     // to be used for different purposes, which include VersionContext encryption and key wrapping.
-    fn derive_service_encryption_key(
+    pub(crate) fn derive_raw_service_encryption_key(
         &self,
         encryption_key: EncryptionHeaderKey,
-    ) -> Result<crypto::aes::Key, HwCryptoError> {
+    ) -> Result<Vec<u8>, HwCryptoError> {
         let encryption_key = match encryption_key {
             EncryptionHeaderKey::KeyGenerationContext(key_context) => {
                 get_encryption_key(self.header_version, key_context)?
@@ -151,6 +151,19 @@ impl EncryptionHeader {
             }
         };
         derive_key_hkdf(&encryption_key, &self.key_derivation_context[..])
+    }
+
+    pub(crate) fn derive_service_encryption_key(
+        &self,
+        encryption_key: EncryptionHeaderKey,
+    ) -> Result<crypto::aes::Key, HwCryptoError> {
+        let raw_key = self.derive_raw_service_encryption_key(encryption_key)?;
+        let key_material = crypto::aes::Key::Aes256(
+            raw_key
+                .try_into()
+                .expect("should not fail, call with SERVICE_KEK_LENGTH returns 32 bytes"),
+        );
+        Ok(key_material)
     }
 
     /// Encrypt CBOR serializable data using a device key derived using `key_context`
@@ -333,13 +346,9 @@ fn get_encryption_key(header_version: u32, key_context: &[u8]) -> Result<Vec<u8>
 fn derive_key_hkdf(
     derivation_key: &[u8],
     derivation_context: &[u8],
-) -> Result<crypto::aes::Key, HwCryptoError> {
+) -> Result<Vec<u8>, HwCryptoError> {
     let kdf = crypto_provider::HmacImpl;
-    let raw_key = kdf.hkdf(&[], &derivation_key, &derivation_context, SERVICE_KEK_LENGTH)?;
-    let key_material = crypto::aes::Key::Aes256(
-        raw_key.try_into().expect("should not fail, call with SERVICE_KEK_LENGTH returns 32 bytes"),
-    );
-    Ok(key_material)
+    Ok(kdf.hkdf(&[], &derivation_key, &derivation_context, SERVICE_KEK_LENGTH)?)
 }
 
 fn get_new_key_derivation_context() -> [u8; KEY_DERIVATION_CTX_LENGTH] {
