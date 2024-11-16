@@ -47,6 +47,8 @@ MODULE_AIDLS := \
     $(HWCRYPTO_AIDL_DIR)/$(MODULE_AIDL_PACKAGE)/types/CipherModeParameters.aidl             \
     $(HWCRYPTO_AIDL_DIR)/$(MODULE_AIDL_PACKAGE)/types/ExplicitKeyMaterial.aidl              \
     $(HWCRYPTO_AIDL_DIR)/$(MODULE_AIDL_PACKAGE)/types/HalErrorCode.aidl                     \
+    $(HWCRYPTO_AIDL_DIR)/$(MODULE_AIDL_PACKAGE)/types/HmacOperationParameters.aidl          \
+    $(HWCRYPTO_AIDL_DIR)/$(MODULE_AIDL_PACKAGE)/types/HmacKey.aidl          \
     $(HWCRYPTO_AIDL_DIR)/$(MODULE_AIDL_PACKAGE)/types/KeyLifetime.aidl                      \
     $(HWCRYPTO_AIDL_DIR)/$(MODULE_AIDL_PACKAGE)/types/KeyPermissions.aidl                   \
     $(HWCRYPTO_AIDL_DIR)/$(MODULE_AIDL_PACKAGE)/types/KeyType.aidl                          \
@@ -55,6 +57,7 @@ MODULE_AIDLS := \
     $(HWCRYPTO_AIDL_DIR)/$(MODULE_AIDL_PACKAGE)/types/OpaqueKeyToken.aidl                   \
     $(HWCRYPTO_AIDL_DIR)/$(MODULE_AIDL_PACKAGE)/types/OperationData.aidl                    \
     $(HWCRYPTO_AIDL_DIR)/$(MODULE_AIDL_PACKAGE)/types/OperationType.aidl                    \
+    $(HWCRYPTO_AIDL_DIR)/$(MODULE_AIDL_PACKAGE)/types/ProtectionId.aidl                     \
     $(HWCRYPTO_AIDL_DIR)/$(MODULE_AIDL_PACKAGE)/types/SymmetricAuthCryptoParameters.aidl    \
     $(HWCRYPTO_AIDL_DIR)/$(MODULE_AIDL_PACKAGE)/types/SymmetricAuthOperationParameters.aidl \
     $(HWCRYPTO_AIDL_DIR)/$(MODULE_AIDL_PACKAGE)/types/SymmetricCryptoParameters.aidl        \

@@ -26,7 +26,7 @@ use android_hardware_security_see::aidl::android::hardware::security::see::hwcry
         BnHwCryptoKey, DerivedKey::DerivedKey, DerivedKeyParameters::DerivedKeyParameters,
         DerivedKeyPolicy::DerivedKeyPolicy, DeviceKeyId::DeviceKeyId,
         DiceBoundDerivationKey::DiceBoundDerivationKey, DiceBoundKeyResult::DiceBoundKeyResult,
-        DiceCurrentBoundKeyResult::DiceCurrentBoundKeyResult, IHwCryptoKey,
+        DiceCurrentBoundKeyResult::DiceCurrentBoundKeyResult, IHwCryptoKey, KeySlot::KeySlot,
     },
     IHwCryptoOperations::IHwCryptoOperations,
     IOpaqueKey::IOpaqueKey,
@@ -273,6 +273,15 @@ impl HwCryptoKey {
             )),
         }
     }
+
+    fn check_caller_can_access_keyslot(&self, _keyslot: KeySlot) -> Result<(), HwCryptoError> {
+        // Simple uuid check for host uuid until we have DICE
+        if self.uuid.to_string() == "00000000-0000-0000-0000-000000000000" {
+            Err(hwcrypto_err!(UNAUTHORIZED, "caller do not have permission to access this key"))
+        } else {
+            Ok(())
+        }
+    }
 }
 
 impl IHwCryptoKey for HwCryptoKey {
@@ -394,6 +403,31 @@ impl IHwCryptoKey for HwCryptoKey {
         let key_material = helpers::aidl_explicit_key_to_rust_key_material(key_to_be_imported)?;
         Ok(OpaqueKey::import_key_material(new_key_policy, key_material, self.uuid.clone())?)
     }
+
+    fn getKeyslotData(&self, keyslot: KeySlot) -> binder::Result<binder::Strong<dyn IOpaqueKey>> {
+        self.check_caller_can_access_keyslot(keyslot)?;
+        match keyslot {
+            KeySlot::KEYMINT_SHARED_HMAC_KEY => {
+                let key_generator =
+                    EncryptionHeader::generate_with_version(0, EncryptedContent::KeyMaterial);
+                let mock_hmac_key = key_generator.derive_raw_service_encryption_key(
+                    EncryptionHeaderKey::KeyGenerationContext(b"hmac_key_ctx"),
+                )?;
+                let policy = KeyPolicy {
+                    usage: KeyUse::SIGN,
+                    keyLifetime: KeyLifetime::HARDWARE,
+                    keyPermissions: Vec::new(),
+                    keyType: KeyType::HMAC_SHA256,
+                    keyManagementKey: false,
+                };
+                OpaqueKey::new_opaque_key_from_raw_bytes(&policy, mock_hmac_key, self.uuid.clone())
+            }
+            _ => Err(binder::Status::new_exception_str(
+                binder::ExceptionCode::UNSUPPORTED_OPERATION,
+                Some("Unknown key slot requested"),
+            )),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -403,7 +437,8 @@ mod tests {
     use android_hardware_security_see::aidl::android::hardware::security::see::hwcrypto::{
         types::{
             AesCipherMode::AesCipherMode, AesKey::AesKey,
-            CipherModeParameters::CipherModeParameters, OperationData::OperationData,
+            CipherModeParameters::CipherModeParameters, HmacKey::HmacKey,
+            HmacOperationParameters::HmacOperationParameters, OperationData::OperationData,
             SymmetricCryptoParameters::SymmetricCryptoParameters,
             SymmetricOperation::SymmetricOperation,
             SymmetricOperationParameters::SymmetricOperationParameters,
@@ -493,6 +528,56 @@ mod tests {
         let decrypted_msg =
             String::from_utf8(decrypted_data).expect("couldn't decode received message");
         expect_eq!(decrypted_msg, "string to be encrypted", "couldn't retrieve original message");
+    }
+
+    #[test]
+    fn import_clear_hmac_key() {
+        let hw_key: Strong<dyn IHwCryptoKey> =
+            RpcSession::new().setup_trusty_client(RUST_SERVICE_PORT).expect("Failed to connect");
+        let hw_crypto = hw_key.getHwCryptoOperations().expect("couldn't get key crypto ops.");
+        let usage = KeyUse::SIGN;
+        let key_type = KeyType::HMAC_SHA256;
+        let policy = KeyPolicy {
+            usage,
+            keyLifetime: KeyLifetime::PORTABLE,
+            keyPermissions: Vec::new(),
+            keyType: key_type,
+            keyManagementKey: false,
+        };
+        let aes_key_material: ExplicitKeyMaterial = ExplicitKeyMaterial::Hmac(HmacKey::Sha256([
+            10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10,
+            10, 10, 10, 10, 10, 10, 10, 10, 10, 10,
+        ]));
+        let key = hw_key.importClearKey(&aes_key_material, &policy).expect("couldn't import key");
+        let hmac_parameters = HmacOperationParameters { key: Some(key) };
+        let op_parameters = OperationParameters::Hmac(hmac_parameters);
+        let mut cmd_list = Vec::<CryptoOperation>::new();
+        let data_output = OperationData::DataBuffer(Vec::new());
+        cmd_list.push(CryptoOperation::DataOutput(data_output));
+        cmd_list.push(CryptoOperation::SetOperationParameters(op_parameters));
+        let input_data = OperationData::DataBuffer(b"test data".to_vec());
+        cmd_list.push(CryptoOperation::DataInput(input_data));
+        cmd_list.push(CryptoOperation::Finish(None));
+        let crypto_op_set = CryptoOperationSet { context: None, operations: cmd_list };
+        let mut crypto_sets = Vec::new();
+        crypto_sets.push(crypto_op_set);
+        let mut additional_error_info =
+            CryptoOperationErrorAdditionalInfo { failingCommandIndex: 0 };
+        hw_crypto
+            .processCommandList(&mut crypto_sets, &mut additional_error_info)
+            .expect("couldn't process commands");
+        // Extracting the vector from the command list because of ownership
+        let CryptoOperation::DataOutput(OperationData::DataBuffer(mac)) =
+            crypto_sets.remove(0).operations.remove(0)
+        else {
+            panic!("not reachable, we created this object above on the test");
+        };
+        let expected_response = [
+            0x1d, 0x07, 0xd7, 0x52, 0xc2, 0x1a, 0x46, 0x73, 0xd8, 0x0b, 0xc4, 0x9b, 0xc8, 0x27,
+            0xbb, 0x9d, 0x9b, 0x36, 0xe8, 0xfc, 0xec, 0xc1, 0x97, 0x21, 0xb2, 0x83, 0x57, 0x4a,
+            0x18, 0x95, 0x5d, 0xfc,
+        ];
+        expect_eq!(mac, expected_response, "Didn't get back expected mac");
     }
 
     #[test]
@@ -707,5 +792,24 @@ mod tests {
 
         let key = hw_key.keyTokenImport(&token, &bad_dice_policy);
         expect!(key.is_err(), "shouldn't be able to import key using the wrong DICE policy");
+    }
+
+    #[test]
+    fn get_keyslot() {
+        let hw_key: Strong<dyn IHwCryptoKey> =
+            RpcSession::new().setup_trusty_client(RUST_SERVICE_PORT).expect("Failed to connect");
+
+        let key = hw_key.getKeyslotData(KeySlot::KEYMINT_SHARED_HMAC_KEY);
+        expect!(key.is_ok(), "couldn't get key");
+    }
+
+    #[test]
+    fn get_keyslot_form_unautorized_caller() {
+        let hw_key = HwCryptoKey::new_binder(
+            Uuid::new_from_string("00000000-0000-0000-0000-000000000000")
+                .expect("couldn't create uuid"),
+        );
+        let key = hw_key.getKeyslotData(KeySlot::KEYMINT_SHARED_HMAC_KEY);
+        expect!(key.is_err(), "shouldn't be able to get key");
     }
 }
