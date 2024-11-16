@@ -1062,9 +1062,29 @@ pub(crate) fn check_key_material_with_policy(
         }
         KeyMaterial::Hmac(hmac_key) => match hmac_key {
             OpaqueOr::Opaque(_) => Err(hwcrypto_err!(BAD_PARAMETER, "opaque HMAC key provided")),
-            OpaqueOr::Explicit(_) => match *key_type {
-                KeyType::HMAC_SHA256 => Ok(()),
-                KeyType::HMAC_SHA512 => Ok(()),
+            OpaqueOr::Explicit(km) => match *key_type {
+                KeyType::HMAC_SHA256 | KeyType::HMAC_SHA512 => {
+                    let expected_size = get_key_size_in_bytes(key_type)?;
+                    let km_size = km.0.len();
+                    match policy.usage {
+                        KeyUse::SIGN | KeyUse::DERIVE => Ok(()),
+                        _ => Err(hwcrypto_err!(
+                            BAD_PARAMETER,
+                            "wrong key use for hmac key, received {:?}",
+                            policy.usage
+                        )),
+                    }?;
+                    if km_size == expected_size {
+                        Ok(())
+                    } else {
+                        Err(hwcrypto_err!(
+                            BAD_PARAMETER,
+                            "bad len for hmac key received {} bytes, expected {} bytes",
+                            km_size,
+                            expected_size
+                        ))
+                    }
+                }
                 _ => Err(hwcrypto_err!(
                     BAD_PARAMETER,
                     "type mismatch for HMAC key key type: {:?}",
