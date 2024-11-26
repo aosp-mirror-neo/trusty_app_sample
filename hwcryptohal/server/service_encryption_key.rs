@@ -40,43 +40,136 @@ const ZERO_NONCE: [u8; 12] = [0u8; 12];
 
 const KEY_DERIVATION_CTX_COSE_LABEL: i64 = -65539;
 const KEY_DERIVATION_VERSION_COSE_LABEL: i64 = -65540;
+const WRAPPED_CONTENT_TYPE_COSE_LABEL: i64 = -65541;
+
+// `EncryptionHeaderKey` defines if we derive a device key bound to HwCrypto service or if we use a
+// provided key for that. This key will then be used to encrypt some content.
+pub(crate) enum EncryptionHeaderKey<'a> {
+    // `KeyGenerationContext` will be used to derive a key from a key bounded to HwCrypto service
+    KeyGenerationContext(&'a [u8]),
+    // `ProvidedHkdfKey` will be directly fed to the hkdf algorithm.
+    ProvidedHkdfKey(Vec<u8>),
+}
+
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub(crate) enum EncryptedContent {
+    DicePolicy = 1,
+    WrappedKeyMaterial = 2,
+    KeyMaterial = 3,
+}
+
+impl TryFrom<u64> for EncryptedContent {
+    type Error = HwCryptoError;
+
+    fn try_from(value: u64) -> Result<Self, Self::Error> {
+        match value {
+            x if x == EncryptedContent::DicePolicy as u64 => Ok(EncryptedContent::DicePolicy),
+            x if x == EncryptedContent::WrappedKeyMaterial as u64 => {
+                Ok(EncryptedContent::WrappedKeyMaterial)
+            }
+            x if x == EncryptedContent::KeyMaterial as u64 => Ok(EncryptedContent::KeyMaterial),
+            _ => Err(hwcrypto_err!(
+                SERIALIZATION_ERROR,
+                "invalid value for EncryptedContent: {}",
+                value
+            )),
+        }
+    }
+}
+
+impl TryFrom<ciborium::value::Integer> for EncryptedContent {
+    type Error = HwCryptoError;
+
+    fn try_from(value: ciborium::value::Integer) -> Result<Self, Self::Error> {
+        let value: u64 = value.try_into().map_err(|_| {
+            hwcrypto_err!(SERIALIZATION_ERROR, "couldn't convert CBOR integer into u64")
+        })?;
+        Ok(value.try_into().map_err(|_| {
+            hwcrypto_err!(
+                SERIALIZATION_ERROR,
+                "Error converting encrypted content type from ciborium value"
+            )
+        })?)
+    }
+}
+
+impl From<EncryptedContent> for ciborium::value::Integer {
+    fn from(value: EncryptedContent) -> Self {
+        (value as u64).into()
+    }
+}
 
 // Header used to derive a different key per each encrypted context. Encryption of the context is
 // similar to what KeyMint does to wrap keys.
 pub(crate) struct EncryptionHeader {
     key_derivation_context: [u8; KEY_DERIVATION_CTX_LENGTH],
     header_version: u32,
+    wrapped_content_type: EncryptedContent,
 }
 
 impl EncryptionHeader {
-    fn new(key_derivation_context: [u8; KEY_DERIVATION_CTX_LENGTH], header_version: u32) -> Self {
-        Self { key_derivation_context, header_version }
+    fn new(
+        key_derivation_context: [u8; KEY_DERIVATION_CTX_LENGTH],
+        header_version: u32,
+        wrapped_content_type: EncryptedContent,
+    ) -> Self {
+        Self { key_derivation_context, header_version, wrapped_content_type }
     }
 
-    pub(crate) fn generate() -> Result<Self, HwCryptoError> {
+    pub(crate) fn generate(wrapped_content_type: EncryptedContent) -> Result<Self, HwCryptoError> {
         let header_version = get_service_current_version()?;
-        Ok(Self::generate_with_version(header_version))
+        Ok(Self::generate_with_version(header_version, wrapped_content_type))
     }
 
-    pub(crate) fn generate_with_version(header_version: u32) -> Self {
+    pub(crate) fn generate_with_version(
+        header_version: u32,
+        wrapped_content_type: EncryptedContent,
+    ) -> Self {
         let key_derivation_context = get_new_key_derivation_context();
-        Self::new(key_derivation_context, header_version)
+        Self::new(key_derivation_context, header_version, wrapped_content_type)
     }
 
     // Function used to generate different device bound encryption keys tied to the HWCrypto service
     // to be used for different purposes, which include VersionContext encryption and key wrapping.
-    fn derive_service_encryption_key(
+    pub(crate) fn derive_raw_service_encryption_key(
         &self,
-        key_context: &[u8],
-    ) -> Result<crypto::aes::Key, HwCryptoError> {
-        let encryption_key = get_encryption_key(self.header_version, key_context)?;
+        encryption_key: EncryptionHeaderKey,
+    ) -> Result<Vec<u8>, HwCryptoError> {
+        let encryption_key = match encryption_key {
+            EncryptionHeaderKey::KeyGenerationContext(key_context) => {
+                get_encryption_key(self.header_version, key_context)?
+            }
+            EncryptionHeaderKey::ProvidedHkdfKey(key) => {
+                if key.len() != SERVICE_KEK_LENGTH {
+                    return Err(hwcrypto_err!(
+                        INVALID_KEY,
+                        "We only support hkdf keys of length {}",
+                        SERVICE_KEK_LENGTH
+                    ));
+                }
+                key
+            }
+        };
         derive_key_hkdf(&encryption_key, &self.key_derivation_context[..])
+    }
+
+    pub(crate) fn derive_service_encryption_key(
+        &self,
+        encryption_key: EncryptionHeaderKey,
+    ) -> Result<crypto::aes::Key, HwCryptoError> {
+        let raw_key = self.derive_raw_service_encryption_key(encryption_key)?;
+        let key_material = crypto::aes::Key::Aes256(
+            raw_key
+                .try_into()
+                .expect("should not fail, call with SERVICE_KEK_LENGTH returns 32 bytes"),
+        );
+        Ok(key_material)
     }
 
     /// Encrypt CBOR serializable data using a device key derived using `key_context`
     pub(crate) fn encrypt_content_service_encryption_key<T: AsCborValue>(
         &self,
-        key_context: &[u8],
+        key_context: EncryptionHeaderKey,
         content: T,
     ) -> Result<Vec<u8>, HwCryptoError> {
         let kek = self.derive_service_encryption_key(key_context)?;
@@ -106,11 +199,20 @@ impl EncryptionHeader {
     /// include an `EncryptionHeader` on the COSE protected header.
     pub(crate) fn decrypt_content_service_encryption_key(
         encrypted_context: &[u8],
-        key_context: &[u8],
+        key_context: EncryptionHeaderKey,
+        wrapped_content_type: EncryptedContent,
     ) -> Result<(Self, Vec<u8>), HwCryptoError> {
         let context: coset::CoseEncrypt0 = coset::CborSerializable::from_slice(encrypted_context)?;
         let encryption_header: EncryptionHeader = (&context.protected).try_into()?;
         let kek = encryption_header.derive_service_encryption_key(key_context)?;
+
+        if encryption_header.wrapped_content_type != wrapped_content_type {
+            return Err(hwcrypto_err!(
+                BAD_PARAMETER,
+                "provided content has wrong content. Expected {:?}",
+                wrapped_content_type
+            ));
+        }
 
         let aes = crypto_provider::AesImpl;
         let mut op = aes.begin_aead(
@@ -139,15 +241,16 @@ impl TryFrom<&ProtectedHeader> for EncryptionHeader {
 
     fn try_from(value: &ProtectedHeader) -> Result<EncryptionHeader, Self::Error> {
         let cose_header_rest = &value.header.rest;
-        if cose_header_rest.len() != 2 {
+        if cose_header_rest.len() != 3 {
             return Err(hwcrypto_err!(
                 BAD_PARAMETER,
-                "header length was {} instead of 2",
+                "header length was {} instead of 3",
                 cose_header_rest.len()
             ));
         }
         let mut key_derivation_context = None;
         let mut header_version = None;
+        let mut wrapped_content_type: Option<EncryptedContent> = None;
         for element in cose_header_rest {
             let label: i64 = element
                 .0
@@ -177,6 +280,18 @@ impl TryFrom<&ProtectedHeader> for EncryptionHeader {
                 KEY_DERIVATION_VERSION_COSE_LABEL => {
                     header_version = Some(parse_cborium_u32(&element.1, "header version")?);
                 }
+                WRAPPED_CONTENT_TYPE_COSE_LABEL => {
+                    wrapped_content_type = Some(
+                        element
+                            .1
+                            .as_integer()
+                            .ok_or(hwcrypto_err!(
+                                BAD_PARAMETER,
+                                "wrapped_content_type was not an integer"
+                            ))?
+                            .try_into()?,
+                    );
+                }
                 _ => return Err(hwcrypto_err!(BAD_PARAMETER, "unknown label {}", label)),
             }
         }
@@ -184,7 +299,9 @@ impl TryFrom<&ProtectedHeader> for EncryptionHeader {
             .ok_or(hwcrypto_err!(SERIALIZATION_ERROR, "couldn't parse key context"))?;
         let header_version = header_version
             .ok_or(hwcrypto_err!(SERIALIZATION_ERROR, "couldn't parse header version"))?;
-        Ok(Self::new(key_derivation_context, header_version))
+        let wrapped_content_type = wrapped_content_type
+            .ok_or(hwcrypto_err!(SERIALIZATION_ERROR, "couldn't parse content type"))?;
+        Ok(Self::new(key_derivation_context, header_version, wrapped_content_type))
     }
 }
 
@@ -198,6 +315,10 @@ impl TryFrom<&EncryptionHeader> for Header {
             .algorithm(coset::iana::Algorithm::A256GCM)
             .value(KEY_DERIVATION_CTX_COSE_LABEL, Value::Bytes(key_derivation_context))
             .value(KEY_DERIVATION_VERSION_COSE_LABEL, Value::Integer(value.header_version.into()))
+            .value(
+                WRAPPED_CONTENT_TYPE_COSE_LABEL,
+                Value::Integer(value.wrapped_content_type.into()),
+            )
             .build();
         Ok(cose_header)
     }
@@ -225,13 +346,9 @@ fn get_encryption_key(header_version: u32, key_context: &[u8]) -> Result<Vec<u8>
 fn derive_key_hkdf(
     derivation_key: &[u8],
     derivation_context: &[u8],
-) -> Result<crypto::aes::Key, HwCryptoError> {
+) -> Result<Vec<u8>, HwCryptoError> {
     let kdf = crypto_provider::HmacImpl;
-    let raw_key = kdf.hkdf(&[], &derivation_key, &derivation_context, SERVICE_KEK_LENGTH)?;
-    let key_material = crypto::aes::Key::Aes256(
-        raw_key.try_into().expect("should not fail, call with SERVICE_KEK_LENGTH returns 32 bytes"),
-    );
-    Ok(key_material)
+    Ok(kdf.hkdf(&[], &derivation_key, &derivation_context, SERVICE_KEK_LENGTH)?)
 }
 
 fn get_new_key_derivation_context() -> [u8; KEY_DERIVATION_CTX_LENGTH] {
@@ -292,18 +409,19 @@ mod tests {
 
     #[test]
     fn header_encryption_decryption() {
-        let header = EncryptionHeader::generate();
+        let header = EncryptionHeader::generate(EncryptedContent::DicePolicy);
         expect!(header.is_ok(), "couldn't generate header");
         let header = header.unwrap();
         let encrypted_content = header.encrypt_content_service_encryption_key(
-            b"fake_context",
+            EncryptionHeaderKey::KeyGenerationContext(b"fake_context"),
             Value::Bytes(b"test_data".to_vec()),
         );
         expect!(encrypted_content.is_ok(), "couldn't generate header");
         let encrypted_content = encrypted_content.unwrap();
         let decrypted_data = EncryptionHeader::decrypt_content_service_encryption_key(
             &encrypted_content[..],
-            b"fake_context",
+            EncryptionHeaderKey::KeyGenerationContext(b"fake_context"),
+            EncryptedContent::DicePolicy,
         );
         expect!(decrypted_data.is_ok(), "couldn't generate header");
         let (decrypted_header, decrypted_content) = decrypted_data.unwrap();

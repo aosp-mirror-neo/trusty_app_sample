@@ -21,6 +21,7 @@ pub use android_hardware_security_see::aidl::android::hardware::security::see::h
 use android_hardware_security_see::binder;
 use core::array::TryFromSliceError;
 use coset::CoseError;
+use std::sync::PoisonError;
 use tipc::TipcError;
 use vm_memory::VolatileMemoryError;
 
@@ -120,5 +121,14 @@ impl From<HwCryptoError> for binder::Status {
                 )
             }
         }
+    }
+}
+
+impl<T> From<PoisonError<T>> for HwCryptoError {
+    fn from(_: PoisonError<T>) -> Self {
+        hwcrypto_err!(
+            GENERIC_ERROR,
+            "found PoisonError which shouldn't happen, we are single threaded"
+        )
     }
 }
