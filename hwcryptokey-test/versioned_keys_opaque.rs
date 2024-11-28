@@ -16,7 +16,7 @@
 
 #[cfg(test)]
 mod tests {
-    use android_hardware_security_see::aidl::android::hardware::security::see::hwcrypto::{
+    use android_hardware_security_see_hwcrypto::aidl::android::hardware::security::see::hwcrypto::{
         types::{
             AesCipherMode::AesCipherMode, CipherModeParameters::CipherModeParameters,
             KeyLifetime::KeyLifetime, KeyType::KeyType, KeyUse::KeyUse,
