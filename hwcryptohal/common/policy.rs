@@ -17,10 +17,10 @@
 //! KeyPolicy serialization facilities
 
 use alloc::collections::btree_set::BTreeSet;
-use android_hardware_security_see::aidl::android::hardware::security::see::hwcrypto::types::{
+use android_hardware_security_see_hwcrypto::aidl::android::hardware::security::see::hwcrypto::types::{
     KeyLifetime::KeyLifetime, KeyPermissions::KeyPermissions, KeyType::KeyType, KeyUse::KeyUse,
 };
-use android_hardware_security_see::aidl::android::hardware::security::see::hwcrypto::KeyPolicy::KeyPolicy;
+use android_hardware_security_see_hwcrypto::aidl::android::hardware::security::see::hwcrypto::KeyPolicy::KeyPolicy;
 use ciborium::Value;
 use coset::{AsCborValue, CborSerializable, CoseError};
 
