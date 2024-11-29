@@ -16,7 +16,7 @@
 
 //! Helper functions that includes data transformation for AIDL types.
 
-use android_hardware_security_see::aidl::android::hardware::security::see::hwcrypto::types::{
+use android_hardware_security_see_hwcrypto::aidl::android::hardware::security::see::hwcrypto::types::{
     AesCipherMode::AesCipherMode, AesKey::AesKey, CipherModeParameters::CipherModeParameters,
     ExplicitKeyMaterial::ExplicitKeyMaterial, HmacKey::HmacKey, KeyType::KeyType, KeyUse::KeyUse,
     SymmetricCryptoParameters::SymmetricCryptoParameters, SymmetricOperation::SymmetricOperation,
