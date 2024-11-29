@@ -16,10 +16,10 @@
 
 //! Module providing an implementation of a cryptographic command processor.
 
-use android_hardware_security_see::aidl::android::hardware::security::see::hwcrypto::types::{
+use android_hardware_security_see_hwcrypto::aidl::android::hardware::security::see::hwcrypto::types::{
     MemoryBufferReference::MemoryBufferReference, OperationData::OperationData,
 };
-use android_hardware_security_see::aidl::android::hardware::security::see::hwcrypto::{
+use android_hardware_security_see_hwcrypto::aidl::android::hardware::security::see::hwcrypto::{
     CryptoOperation::CryptoOperation,
     MemoryBufferParameter::{
         MemoryBuffer::MemoryBuffer as MemoryBufferAidl, MemoryBufferParameter,
@@ -814,7 +814,7 @@ impl CmdProcessorContext {
 mod tests {
     use super::*;
     use crate::opaque_key::OpaqueKey;
-    use android_hardware_security_see::aidl::android::hardware::security::see::hwcrypto::{
+    use android_hardware_security_see_hwcrypto::aidl::android::hardware::security::see::hwcrypto::{
         types::{
             AesCipherMode::AesCipherMode, CipherModeParameters::CipherModeParameters, HalErrorCode,
             KeyLifetime::KeyLifetime, KeyType::KeyType, KeyUse::KeyUse,
