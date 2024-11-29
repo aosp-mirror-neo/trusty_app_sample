@@ -17,13 +17,13 @@
 //! Implementation of the `IOpaqueKey` AIDL interface. It is used as a handle to key material
 
 use alloc::collections::btree_map::BTreeMap;
-use android_hardware_security_see::aidl::android::hardware::security::see::hwcrypto::types::{
+use android_hardware_security_see_hwcrypto::aidl::android::hardware::security::see::hwcrypto::types::{
     AesCipherMode::AesCipherMode, KeyLifetime::KeyLifetime, KeyPermissions::KeyPermissions,
     KeyType::KeyType, KeyUse::KeyUse, OpaqueKeyToken::OpaqueKeyToken, OperationType::OperationType,
     ProtectionId::ProtectionId, SymmetricCryptoParameters::SymmetricCryptoParameters,
     SymmetricOperation::SymmetricOperation,
 };
-use android_hardware_security_see::aidl::android::hardware::security::see::hwcrypto::{
+use android_hardware_security_see_hwcrypto::aidl::android::hardware::security::see::hwcrypto::{
     IHwCryptoKey::{
         DeviceKeyId::DeviceKeyId, DiceBoundDerivationKey::DiceBoundDerivationKey,
         DiceBoundKeyResult::DiceBoundKeyResult,
@@ -31,7 +31,7 @@ use android_hardware_security_see::aidl::android::hardware::security::see::hwcry
     IOpaqueKey::{BnOpaqueKey, IOpaqueKey},
     KeyPolicy::KeyPolicy,
 };
-use android_hardware_security_see::binder;
+use android_hardware_security_see_hwcrypto::binder;
 use binder::binder_impl::Binder;
 use ciborium::Value;
 use core::fmt;
