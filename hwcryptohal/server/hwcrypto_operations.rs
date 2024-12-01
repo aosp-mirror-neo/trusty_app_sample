@@ -17,12 +17,12 @@
 //! Implementation of the `IHwCryptoOperations` AIDL interface. It can be use to retrieve the
 //! key generation interface and to process cryptographic operations.
 
-use android_hardware_security_see::aidl::android::hardware::security::see::hwcrypto::{
+use android_hardware_security_see_hwcrypto::aidl::android::hardware::security::see::hwcrypto::{
     CryptoOperationErrorAdditionalInfo::CryptoOperationErrorAdditionalInfo,
     CryptoOperationResult::CryptoOperationResult, CryptoOperationSet::CryptoOperationSet,
     IHwCryptoOperations::BnHwCryptoOperations, IHwCryptoOperations::IHwCryptoOperations,
 };
-use android_hardware_security_see::binder;
+use android_hardware_security_see_hwcrypto::binder;
 use hwcryptohal_common::hwcrypto_err;
 
 use crate::cmd_processing::CmdProcessorContext;
@@ -78,7 +78,7 @@ impl IHwCryptoOperations for HwCryptoOperations {
 mod tests {
     use super::*;
     use crate::hwcrypto_ipc_server::RUST_SERVICE_PORT;
-    use android_hardware_security_see::aidl::android::hardware::security::see::hwcrypto::{
+    use android_hardware_security_see_hwcrypto::aidl::android::hardware::security::see::hwcrypto::{
         types::{
             AesCipherMode::AesCipherMode, CipherModeParameters::CipherModeParameters,
             HmacOperationParameters::HmacOperationParameters, KeyLifetime::KeyLifetime,
