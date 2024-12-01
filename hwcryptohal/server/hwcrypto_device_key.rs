@@ -17,7 +17,7 @@
 //! Implementation of the `IHwCryptoKey` AIDL interface. It can be use to generate and
 //! retrieve device specific keys.
 
-use android_hardware_security_see::aidl::android::hardware::security::see::hwcrypto::{
+use android_hardware_security_see_hwcrypto::aidl::android::hardware::security::see::hwcrypto::{
     types::{
         ExplicitKeyMaterial::ExplicitKeyMaterial, KeyLifetime::KeyLifetime, KeyType::KeyType,
         KeyUse::KeyUse, OpaqueKeyToken::OpaqueKeyToken,
@@ -32,7 +32,7 @@ use android_hardware_security_see::aidl::android::hardware::security::see::hwcry
     IOpaqueKey::IOpaqueKey,
     KeyPolicy::KeyPolicy,
 };
-use android_hardware_security_see::binder;
+use android_hardware_security_see_hwcrypto::binder;
 use ciborium::{cbor, Value};
 use coset::{AsCborValue, CborSerializable, CoseError};
 use hwcryptohal_common::{cose_enum_gen, err::HwCryptoError, hwcrypto_err};
@@ -434,7 +434,7 @@ impl IHwCryptoKey for HwCryptoKey {
 mod tests {
     use super::*;
     use crate::hwcrypto_ipc_server::RUST_SERVICE_PORT;
-    use android_hardware_security_see::aidl::android::hardware::security::see::hwcrypto::{
+    use android_hardware_security_see_hwcrypto::aidl::android::hardware::security::see::hwcrypto::{
         types::{
             AesCipherMode::AesCipherMode, AesKey::AesKey,
             CipherModeParameters::CipherModeParameters, HmacKey::HmacKey,

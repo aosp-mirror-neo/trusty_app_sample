@@ -95,8 +95,8 @@ pub fn main_loop() -> Result<(), HwCryptoError> {
 
 #[cfg(test)]
 mod tests {
-    use android_hardware_security_see::aidl::android::hardware::security::see::hwcrypto::IHwCryptoKey::IHwCryptoKey;
-    use android_hardware_security_see::aidl::android::hardware::security::see::hwcrypto::IHwCryptoOperations::IHwCryptoOperations;
+    use android_hardware_security_see_hwcrypto::aidl::android::hardware::security::see::hwcrypto::IHwCryptoKey::IHwCryptoKey;
+    use android_hardware_security_see_hwcrypto::aidl::android::hardware::security::see::hwcrypto::IHwCryptoOperations::IHwCryptoOperations;
     use rpcbinder::RpcSession;
     use binder::{IBinder, Strong};
     use test::expect_eq;
