@@ -240,7 +240,6 @@ impl HwCryptoKey {
                     DeviceKeyId::DEVICE_BOUND_KEY => {
                         Ok(hwkey_session.derive_key_req().unique_key())
                     }
-                    DeviceKeyId::BATCH_KEY => Ok(hwkey_session.derive_key_req().shared_key()),
                     _ => Err(hwcrypto_err!(UNSUPPORTED, "unknown key id {:?}", key_id)),
                 }?;
 
@@ -600,7 +599,7 @@ mod tests {
         expect!(key.is_some(), "should have received a key");
         expect!(current_policy, "policy should have been current");
 
-        let derivation_key = DiceBoundDerivationKey::KeyId(DeviceKeyId::BATCH_KEY);
+        let derivation_key = DiceBoundDerivationKey::KeyId(DeviceKeyId::DEVICE_BOUND_KEY);
         let key_and_policy =
             assert_ok!(hw_device_key.deriveCurrentDicePolicyBoundKey(&derivation_key));
         let DiceCurrentBoundKeyResult { diceBoundKey: key, dicePolicyForKeyVersion: policy } =
