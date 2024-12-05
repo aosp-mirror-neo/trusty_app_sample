@@ -16,14 +16,17 @@
 
 //! Module providing a shim for the different crypto operations.
 
-use android_hardware_security_see::aidl::android::hardware::security::see::hwcrypto::types::{
+use android_hardware_security_see_hwcrypto::aidl::android::hardware::security::see::hwcrypto::types::{
+    HmacOperationParameters::HmacOperationParameters, KeyUse::KeyUse,
     SymmetricCryptoParameters::SymmetricCryptoParameters, SymmetricOperation::SymmetricOperation,
 };
-use android_hardware_security_see::aidl::android::hardware::security::see::hwcrypto::{
+use android_hardware_security_see_hwcrypto::aidl::android::hardware::security::see::hwcrypto::{
     OperationParameters::OperationParameters, PatternParameters::PatternParameters,
 };
 use hwcryptohal_common::{err::HwCryptoError, hwcrypto_err};
-use kmr_common::crypto::{self, Aes, KeyMaterial, SymmetricOperation as CryptoSymmetricOperation};
+use kmr_common::crypto::{
+    self, Aes, Hmac, KeyMaterial, SymmetricOperation as CryptoSymmetricOperation,
+};
 
 use crate::cmd_processing::DataToProcess;
 use crate::crypto_provider;
@@ -214,6 +217,95 @@ impl TempBuffer {
             input.read_into_slice(self.0.as_mut_slice(), Some(len))?;
             Ok(&self.0[..])
         }
+    }
+}
+
+pub(crate) struct HmacOperation {
+    accumulating_op: Option<Box<dyn crypto::AccumulatingOperation>>,
+}
+
+impl HmacOperation {
+    fn new(parameters: &HmacOperationParameters) -> Result<Self, HwCryptoError> {
+        let opaque_key: OpaqueKey = parameters
+            .key
+            .as_ref()
+            .ok_or(hwcrypto_err!(BAD_PARAMETER, "hmac key not provided"))?
+            .try_into()?;
+        Self::check_parameters(&opaque_key, parameters)?;
+        let digest = helpers::aidl_to_rust_digest(&opaque_key.get_key_type())?;
+        let hmac = crypto_provider::HmacImpl;
+        let accumulating_op = match opaque_key.key_material {
+            KeyMaterial::Hmac(key) => hmac.begin(key.clone(), digest).map_err(|e| {
+                hwcrypto_err!(GENERIC_ERROR, "couldn't begin hmac operation: {:?}", e)
+            }),
+            _ => Err(hwcrypto_err!(BAD_PARAMETER, "Invalid key type for HMAC operation")),
+        }?;
+        Ok(HmacOperation { accumulating_op: Some(accumulating_op) })
+    }
+
+    fn check_parameters(
+        opaque_key: &OpaqueKey,
+        _parameters: &HmacOperationParameters,
+    ) -> Result<(), HwCryptoError> {
+        if !opaque_key.key_usage_supported(KeyUse::SIGN) {
+            return Err(hwcrypto_err!(BAD_PARAMETER, "Provided key cannot be used for signing"));
+        }
+        match &opaque_key.key_material {
+            KeyMaterial::Hmac(_) => Ok(()),
+            _ => Err(hwcrypto_err!(BAD_PARAMETER, "Invalid key type for HMAC operation")),
+        }
+    }
+}
+
+impl IBaseCryptoOperation for HmacOperation {
+    fn get_req_size_update(&self, _input: &DataToProcess) -> Result<usize, HwCryptoError> {
+        Ok(0)
+    }
+
+    fn get_req_size_finish(&self) -> Result<usize, HwCryptoError> {
+        Ok(crypto_provider::HMAC_MAX_SIZE)
+    }
+
+    fn update(
+        &mut self,
+        input: &mut DataToProcess,
+        _output: &mut DataToProcess,
+    ) -> Result<usize, HwCryptoError> {
+        let op = self
+            .accumulating_op
+            .as_mut()
+            .ok_or(hwcrypto_err!(BAD_STATE, "operation was already finished"))?;
+        // TODO: refactor traits to not require copying the input for VolatileSlices
+        let mut input_buffer = TempBuffer::new();
+        let input_data = input_buffer.read_into_buffer_reference(input, None)?;
+        op.update(input_data)?;
+        Ok(0)
+    }
+
+    fn finish(&mut self, output: &mut DataToProcess) -> Result<usize, HwCryptoError> {
+        let op = self
+            .accumulating_op
+            .take()
+            .ok_or(hwcrypto_err!(BAD_STATE, "operation was already finished"))?;
+        let req_size = self.get_req_size_finish()?;
+        if output.len() != req_size {
+            return Err(hwcrypto_err!(BAD_PARAMETER, "input size was not {}", req_size));
+        }
+        let output_data = op.finish()?;
+        let output_len = output_data.len();
+        output.append_slice(output_data.as_slice())?;
+        Ok(output_len)
+    }
+
+    fn is_active(&self) -> bool {
+        self.accumulating_op.is_some()
+    }
+
+    fn set_operation_pattern(
+        &mut self,
+        _patter_parameter: &PatternParameters,
+    ) -> Result<(), HwCryptoError> {
+        Err(hwcrypto_err!(BAD_PARAMETER, "set_operation_pattern only supported for AES CBC"))
     }
 }
 
@@ -541,6 +633,10 @@ impl CryptographicOperation {
                     Err(hwcrypto_err!(BAD_PARAMETER, "key was null"))
                 }
             }
+            OperationParameters::Hmac(params) => {
+                let hmac_op = HmacOperation::new(params)?;
+                Ok(Box::new(hmac_op))
+            }
             _ => unimplemented!("operation not implemented yet"),
         }
     }
@@ -574,7 +670,7 @@ impl ICryptographicOperation for () {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use android_hardware_security_see::aidl::android::hardware::security::see::hwcrypto::types::{
+    use android_hardware_security_see_hwcrypto::aidl::android::hardware::security::see::hwcrypto::types::{
         AesCipherMode::AesCipherMode, CipherModeParameters::CipherModeParameters,
         KeyLifetime::KeyLifetime,
         KeyType::KeyType, KeyUse::KeyUse,
@@ -582,10 +678,16 @@ mod tests {
         SymmetricOperation::SymmetricOperation,
         SymmetricOperationParameters::SymmetricOperationParameters,
     };
-    use android_hardware_security_see::aidl::android::hardware::security::see::hwcrypto::{
+    use android_hardware_security_see_hwcrypto::aidl::android::hardware::security::see::hwcrypto::{
         KeyPolicy::KeyPolicy,
     };
     use test::{expect, expect_eq};
+    use tipc::Uuid;
+
+    fn connection_info() -> Uuid {
+        // TODO: This is a temporary mock function for testing until we move to use DICE policies.
+        Uuid::new_from_string("f41a7796-975a-4279-8cc4-b73f8820430d").unwrap()
+    }
 
     #[test]
     fn use_aes_key() {
@@ -598,7 +700,8 @@ mod tests {
             keyType: key_type,
             keyManagementKey: false,
         };
-        let handle = OpaqueKey::generate_opaque_key(&policy).expect("couldn't generate key");
+        let handle = OpaqueKey::generate_opaque_key(&policy, connection_info())
+            .expect("couldn't generate key");
         let nonce = [0u8; 16];
         let parameters = SymmetricCryptoParameters::Aes(AesCipherMode::Cbc(CipherModeParameters {
             nonce: nonce.into(),
@@ -684,7 +787,8 @@ mod tests {
             keyType: key_type,
             keyManagementKey: false,
         };
-        let handle = OpaqueKey::generate_opaque_key(&policy).expect("couldn't generate key");
+        let handle = OpaqueKey::generate_opaque_key(&policy, connection_info())
+            .expect("couldn't generate key");
         let nonce = [0u8; 16];
         let parameters = SymmetricCryptoParameters::Aes(AesCipherMode::Cbc(CipherModeParameters {
             nonce: nonce.into(),

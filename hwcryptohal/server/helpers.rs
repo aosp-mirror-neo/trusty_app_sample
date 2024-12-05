@@ -16,17 +16,27 @@
 
 //! Helper functions that includes data transformation for AIDL types.
 
-use android_hardware_security_see::aidl::android::hardware::security::see::hwcrypto::types::{
+use android_hardware_security_see_hwcrypto::aidl::android::hardware::security::see::hwcrypto::types::{
     AesCipherMode::AesCipherMode, AesKey::AesKey, CipherModeParameters::CipherModeParameters,
-    ExplicitKeyMaterial::ExplicitKeyMaterial, KeyType::KeyType, KeyUse::KeyUse,
+    ExplicitKeyMaterial::ExplicitKeyMaterial, HmacKey::HmacKey, KeyType::KeyType, KeyUse::KeyUse,
     SymmetricCryptoParameters::SymmetricCryptoParameters, SymmetricOperation::SymmetricOperation,
 };
 use hwcryptohal_common::{err::HwCryptoError, hwcrypto_err};
 use kmr_common::crypto::{
-    self, aes, KeyMaterial, OpaqueOr, SymmetricOperation as KmSymmetricOperation,
+    self, aes, hmac, KeyMaterial, OpaqueOr, SymmetricOperation as KmSymmetricOperation,
 };
+use kmr_wire::keymint;
 
 use crate::opaque_key::OpaqueKey;
+
+fn aidl_hmac_explicit_key_to_rust_key_material(
+    hmac_key_material: &[u8],
+) -> Result<KeyMaterial, HwCryptoError> {
+    let mut ekm = Vec::new();
+    ekm.try_reserve(hmac_key_material.len())?;
+    ekm.extend_from_slice(hmac_key_material);
+    Ok(KeyMaterial::Hmac(OpaqueOr::Explicit(hmac::Key(ekm))))
+}
 
 pub(crate) fn aidl_explicit_key_to_rust_key_material(
     key_material: &ExplicitKeyMaterial,
@@ -37,6 +47,12 @@ pub(crate) fn aidl_explicit_key_to_rust_key_material(
         }
         ExplicitKeyMaterial::Aes(AesKey::Aes256(km)) => {
             Ok(KeyMaterial::Aes(OpaqueOr::Explicit(aes::Key::Aes256(*km))))
+        }
+        ExplicitKeyMaterial::Hmac(HmacKey::Sha256(km)) => {
+            aidl_hmac_explicit_key_to_rust_key_material(km)
+        }
+        ExplicitKeyMaterial::Hmac(HmacKey::Sha512(km)) => {
+            aidl_hmac_explicit_key_to_rust_key_material(km)
         }
     }
 }
@@ -49,6 +65,14 @@ pub(crate) fn symmetric_encryption_block_based(
             AesCipherMode::Ctr(_) => Ok(false),
             _ => Ok(true),
         },
+    }
+}
+
+pub(crate) fn aidl_to_rust_digest(key_type: &KeyType) -> Result<keymint::Digest, HwCryptoError> {
+    match *key_type {
+        KeyType::HMAC_SHA256 => Ok(keymint::Digest::Sha256),
+        KeyType::HMAC_SHA512 => Ok(keymint::Digest::Sha512),
+        _ => Err(hwcrypto_err!(UNSUPPORTED, "unsupported key type to get digest: {:?}", key_type)),
     }
 }
 

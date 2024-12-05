@@ -17,7 +17,7 @@
 mod tests {
     pub(crate) const RUST_HWCRYPTO_SERVICE_PORT: &str = "com.android.trusty.rust.hwcryptohal.V1";
 
-    use android_hardware_security_see::aidl::android::hardware::security::see::hwcrypto::{
+    use android_hardware_security_see_hwcrypto::aidl::android::hardware::security::see::hwcrypto::{
         types::{
             AesCipherMode::AesCipherMode, AesKey::AesKey,
             CipherModeParameters::CipherModeParameters, ExplicitKeyMaterial::ExplicitKeyMaterial,
