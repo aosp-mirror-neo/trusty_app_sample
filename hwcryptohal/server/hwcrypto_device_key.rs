@@ -17,7 +17,7 @@
 //! Implementation of the `IHwCryptoKey` AIDL interface. It can be use to generate and
 //! retrieve device specific keys.
 
-use android_hardware_security_see::aidl::android::hardware::security::see::hwcrypto::{
+use android_hardware_security_see_hwcrypto::aidl::android::hardware::security::see::hwcrypto::{
     types::{
         ExplicitKeyMaterial::ExplicitKeyMaterial, KeyLifetime::KeyLifetime, KeyType::KeyType,
         KeyUse::KeyUse, OpaqueKeyToken::OpaqueKeyToken,
@@ -32,7 +32,7 @@ use android_hardware_security_see::aidl::android::hardware::security::see::hwcry
     IOpaqueKey::IOpaqueKey,
     KeyPolicy::KeyPolicy,
 };
-use android_hardware_security_see::binder;
+use android_hardware_security_see_hwcrypto::binder;
 use ciborium::{cbor, Value};
 use coset::{AsCborValue, CborSerializable, CoseError};
 use hwcryptohal_common::{cose_enum_gen, err::HwCryptoError, hwcrypto_err};
@@ -240,7 +240,6 @@ impl HwCryptoKey {
                     DeviceKeyId::DEVICE_BOUND_KEY => {
                         Ok(hwkey_session.derive_key_req().unique_key())
                     }
-                    DeviceKeyId::BATCH_KEY => Ok(hwkey_session.derive_key_req().shared_key()),
                     _ => Err(hwcrypto_err!(UNSUPPORTED, "unknown key id {:?}", key_id)),
                 }?;
 
@@ -434,7 +433,7 @@ impl IHwCryptoKey for HwCryptoKey {
 mod tests {
     use super::*;
     use crate::hwcrypto_ipc_server::RUST_SERVICE_PORT;
-    use android_hardware_security_see::aidl::android::hardware::security::see::hwcrypto::{
+    use android_hardware_security_see_hwcrypto::aidl::android::hardware::security::see::hwcrypto::{
         types::{
             AesCipherMode::AesCipherMode, AesKey::AesKey,
             CipherModeParameters::CipherModeParameters, HmacKey::HmacKey,
@@ -600,7 +599,7 @@ mod tests {
         expect!(key.is_some(), "should have received a key");
         expect!(current_policy, "policy should have been current");
 
-        let derivation_key = DiceBoundDerivationKey::KeyId(DeviceKeyId::BATCH_KEY);
+        let derivation_key = DiceBoundDerivationKey::KeyId(DeviceKeyId::DEVICE_BOUND_KEY);
         let key_and_policy =
             assert_ok!(hw_device_key.deriveCurrentDicePolicyBoundKey(&derivation_key));
         let DiceCurrentBoundKeyResult { diceBoundKey: key, dicePolicyForKeyVersion: policy } =
