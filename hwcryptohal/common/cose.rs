@@ -40,9 +40,13 @@ macro_rules! aidl_enum_wrapper {
             }
         }
 
-        impl From<$aidl_name> for $wrapper_name {
-            fn from(value: $aidl_name) -> Self {
-                $wrapper_name(value)
+        impl TryFrom<$aidl_name> for $wrapper_name {
+            type Error = $crate::err::HwCryptoError;
+
+            fn try_from(value: $aidl_name) -> Result<Self, Self::Error> {
+                let val = $wrapper_name(value);
+                val.check_value()?;
+                Ok(val)
             }
         }
 
@@ -70,6 +74,15 @@ macro_rules! aidl_enum_wrapper {
         impl From<$wrapper_name> for ciborium::value::Integer {
             fn from(value: $wrapper_name) -> Self {
                 (value.0.0 as u64).into()
+            }
+        }
+
+        impl $wrapper_name {
+            fn check_value(&self) -> Result<(), $crate::err::HwCryptoError>  {
+                // `TryInto` from a u64 will return an error if the enum value
+                // is not one of the declared ones in `fields`
+                let _: $wrapper_name =  (self.0.0 as u64).try_into()?;
+                Ok(())
             }
         }
     }
