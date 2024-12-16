@@ -16,11 +16,11 @@
 
 //! Module providing a shim for the different crypto operations.
 
-use android_hardware_security_see::aidl::android::hardware::security::see::hwcrypto::types::{
+use android_hardware_security_see_hwcrypto::aidl::android::hardware::security::see::hwcrypto::types::{
     HmacOperationParameters::HmacOperationParameters, KeyUse::KeyUse,
     SymmetricCryptoParameters::SymmetricCryptoParameters, SymmetricOperation::SymmetricOperation,
 };
-use android_hardware_security_see::aidl::android::hardware::security::see::hwcrypto::{
+use android_hardware_security_see_hwcrypto::aidl::android::hardware::security::see::hwcrypto::{
     OperationParameters::OperationParameters, PatternParameters::PatternParameters,
 };
 use hwcryptohal_common::{err::HwCryptoError, hwcrypto_err};
@@ -670,7 +670,7 @@ impl ICryptographicOperation for () {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use android_hardware_security_see::aidl::android::hardware::security::see::hwcrypto::types::{
+    use android_hardware_security_see_hwcrypto::aidl::android::hardware::security::see::hwcrypto::types::{
         AesCipherMode::AesCipherMode, CipherModeParameters::CipherModeParameters,
         KeyLifetime::KeyLifetime,
         KeyType::KeyType, KeyUse::KeyUse,
@@ -678,7 +678,7 @@ mod tests {
         SymmetricOperation::SymmetricOperation,
         SymmetricOperationParameters::SymmetricOperationParameters,
     };
-    use android_hardware_security_see::aidl::android::hardware::security::see::hwcrypto::{
+    use android_hardware_security_see_hwcrypto::aidl::android::hardware::security::see::hwcrypto::{
         KeyPolicy::KeyPolicy,
     };
     use test::{expect, expect_eq};

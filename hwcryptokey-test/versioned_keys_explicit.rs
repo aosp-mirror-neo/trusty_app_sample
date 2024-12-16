@@ -15,7 +15,7 @@
  */
 #[cfg(test)]
 mod tests {
-    use android_hardware_security_see::aidl::android::hardware::security::see::hwcrypto::{
+    use android_hardware_security_see_hwcrypto::aidl::android::hardware::security::see::hwcrypto::{
         IHwCryptoKey::{
             DerivedKey::DerivedKey, DerivedKeyParameters::DerivedKeyParameters,
             DerivedKeyPolicy::DerivedKeyPolicy, DeviceKeyId::DeviceKeyId,
