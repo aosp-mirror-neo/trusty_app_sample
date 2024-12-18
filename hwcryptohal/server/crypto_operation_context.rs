@@ -17,7 +17,7 @@
 //! Implementation of the `ICryptoOperationContext` AIDL interface. It can be used to execute more
 //! commands over the same context.
 
-use android_hardware_security_see::aidl::android::hardware::security::see::hwcrypto::{
+use android_hardware_security_see_hwcrypto::aidl::android::hardware::security::see::hwcrypto::{
     CryptoOperation::CryptoOperation, ICryptoOperationContext::BnCryptoOperationContext,
     ICryptoOperationContext::ICryptoOperationContext,
 };
