@@ -16,15 +16,16 @@
 
 //! Module providing an implementation of a cryptographic command processor.
 
-use android_hardware_security_see::aidl::android::hardware::security::see::hwcrypto::types::{
+use android_hardware_security_see_hwcrypto::aidl::android::hardware::security::see::hwcrypto::types::{
     MemoryBufferReference::MemoryBufferReference, OperationData::OperationData,
 };
-use android_hardware_security_see::aidl::android::hardware::security::see::hwcrypto::{
+use android_hardware_security_see_hwcrypto::aidl::android::hardware::security::see::hwcrypto::{
     CryptoOperation::CryptoOperation,
     MemoryBufferParameter::{
         MemoryBuffer::MemoryBuffer as MemoryBufferAidl, MemoryBufferParameter,
     },
     OperationParameters::OperationParameters,
+    PatternParameters::PatternParameters,
 };
 use core::ffi::c_void;
 use hwcryptohal_common::{err::HwCryptoError, hwcrypto_err};
@@ -99,22 +100,102 @@ enum CmdProcessorState {
     Destroyed,
 }
 
-// `DataToProcess`is used to abstract away if the cryptographic operations are working on memory
-// buffers or vectors.
-pub(crate) enum DataToProcess<'a> {
+pub(crate) enum DataToProcessBuffer<'a> {
     VolatileSlice(VolatileSlice<'a>),
     Slice(&'a mut [u8]),
 }
 
+// `DataToProcess`is used to abstract away if the cryptographic operations are working on memory
+// buffers or vectors.
+pub(crate) struct DataToProcess<'a> {
+    start_index: usize,
+    buffer: DataToProcessBuffer<'a>,
+}
+
 impl<'a> DataToProcess<'a> {
+    pub(crate) fn new_from_volatile_slice(buffer: VolatileSlice<'a>) -> Self {
+        Self { buffer: DataToProcessBuffer::VolatileSlice(buffer), start_index: 0 }
+    }
+
+    pub(crate) fn new_from_slice(buffer: &'a mut [u8]) -> Self {
+        Self { buffer: DataToProcessBuffer::Slice(buffer), start_index: 0 }
+    }
+
     pub(crate) fn len(&self) -> usize {
-        match self {
-            Self::VolatileSlice(vs) => vs.len(),
-            Self::Slice(s) => s.len(),
+        match &self.buffer {
+            DataToProcessBuffer::VolatileSlice(vs) => vs.len() - self.start_index,
+            DataToProcessBuffer::Slice(s) => s.len() - self.start_index,
         }
     }
 
-    pub(crate) fn copy_slice(&mut self, from: &[u8]) -> Result<(), HwCryptoError> {
+    pub(crate) fn is_non_volatile_slice_backed(&self) -> bool {
+        match &self.buffer {
+            DataToProcessBuffer::VolatileSlice(_) => true,
+            DataToProcessBuffer::Slice(_) => false,
+        }
+    }
+
+    /// If self is backed by a non-volatile buffer, returns a slice of the specified
+    /// length, incrementing the current position. Return an error if self is volatile (use
+    /// `read_into_slice()` instead to make a copy of the data) or if the requested length exceeds
+    /// the slice capacity.
+    pub(crate) fn try_slice(&mut self, len: usize) -> Result<&[u8], HwCryptoError> {
+        if len > self.len() {
+            return Err(hwcrypto_err!(
+                BAD_PARAMETER,
+                "end {} out of slice bounds for slice size {}",
+                len,
+                self.len()
+            ));
+        }
+
+        if let DataToProcess { buffer: DataToProcessBuffer::Slice(slice), start_index } = self {
+            let slice_start = *start_index;
+            *start_index += len;
+            Ok(&slice[slice_start..slice_start + len])
+        } else {
+            Err(hwcrypto_err!(BAD_PARAMETER, "DataToProcess is backed by a VolatileSlice",))
+        }
+    }
+
+    pub(crate) fn read_into_slice(
+        &mut self,
+        to: &mut [u8],
+        len: Option<usize>,
+    ) -> Result<(), HwCryptoError> {
+        let len = len.unwrap_or(to.len());
+
+        if len > to.len() {
+            return Err(hwcrypto_err!(
+                BAD_PARAMETER,
+                "end {} out of slice bounds for slice size {}",
+                len,
+                to.len()
+            ));
+        }
+
+        if len > self.len() {
+            return Err(hwcrypto_err!(
+                BAD_PARAMETER,
+                "end {} out of slice bounds for slice size {}",
+                len,
+                self.len()
+            ));
+        }
+
+        match &self.buffer {
+            DataToProcessBuffer::Slice(from) => {
+                to[..len].copy_from_slice(&from[self.start_index..self.start_index + len])
+            }
+            DataToProcessBuffer::VolatileSlice(from) => {
+                from.read_slice(&mut to[..len], self.start_index)?
+            }
+        };
+        self.start_index += len;
+        Ok(())
+    }
+
+    pub(crate) fn append_slice(&mut self, from: &[u8]) -> Result<(), HwCryptoError> {
         if self.len() < from.len() {
             return Err(hwcrypto_err!(
                 BAD_PARAMETER,
@@ -123,34 +204,62 @@ impl<'a> DataToProcess<'a> {
                 from.len()
             ));
         }
-        match self {
-            Self::VolatileSlice(to) => to.write_slice(from, 0)?,
-            Self::Slice(to) => to[..from.len()].copy_from_slice(from),
+        match &mut self.buffer {
+            DataToProcessBuffer::VolatileSlice(to) => to.write_slice(from, self.start_index)?,
+            DataToProcessBuffer::Slice(to) => {
+                to[self.start_index..(self.start_index + from.len())].copy_from_slice(from)
+            }
         }
+        self.start_index += from.len();
         Ok(())
     }
 
-    pub(crate) fn copy_from_slice(
+    pub(crate) fn read_from_slice(
         &mut self,
-        slice: &DataToProcess<'a>,
+        slice: &mut DataToProcess<'a>,
+        len: Option<usize>,
     ) -> Result<(), HwCryptoError> {
-        if self.len() < slice.len() {
+        let read_len = len.unwrap_or(slice.len());
+
+        if read_len > slice.len() {
             return Err(hwcrypto_err!(
                 BAD_PARAMETER,
-                "slice size: {} is less than the slice provided {}",
-                self.len(),
+                "len {} was greater than slice len {}",
+                read_len,
                 slice.len()
             ));
         }
 
-        match (slice, self) {
-            (Self::Slice(from), Self::VolatileSlice(to)) => to.write_slice(from, 0)?,
-            (Self::VolatileSlice(from), Self::VolatileSlice(to)) => {
-                from.copy_to_volatile_slice(to.get_slice(0, to.len())?)
-            }
-            (Self::Slice(from), Self::Slice(to)) => to[..from.len()].copy_from_slice(from),
-            (Self::VolatileSlice(from), Self::Slice(to)) => from.read_slice(to, 0)?,
+        if self.len() < read_len {
+            return Err(hwcrypto_err!(
+                BAD_PARAMETER,
+                "slice size: {} is less than the slice provided size {}",
+                self.len(),
+                read_len
+            ));
         }
+
+        let from_start_index = slice.start_index;
+        let to_start_index = self.start_index;
+
+        match (&slice.buffer, &mut self.buffer) {
+            (DataToProcessBuffer::Slice(from), DataToProcessBuffer::VolatileSlice(to)) => to
+                .write_slice(
+                    &from[from_start_index..from_start_index + read_len],
+                    to_start_index,
+                )?,
+            (DataToProcessBuffer::VolatileSlice(from), DataToProcessBuffer::VolatileSlice(to)) => {
+                from.get_slice(from_start_index, read_len)?
+                    .copy_to_volatile_slice(to.get_slice(to_start_index, read_len)?)
+            }
+            (DataToProcessBuffer::Slice(from), DataToProcessBuffer::Slice(to)) => to
+                [to_start_index..to_start_index + read_len]
+                .copy_from_slice(&from[from_start_index..from_start_index + read_len]),
+            (DataToProcessBuffer::VolatileSlice(from), DataToProcessBuffer::Slice(to)) => from
+                .read_slice(&mut to[to_start_index..to_start_index + read_len], from_start_index)?,
+        }
+        self.start_index += read_len;
+        slice.start_index += read_len;
         Ok(())
     }
 
@@ -165,7 +274,10 @@ impl<'a> DataToProcess<'a> {
         // Addition should be safe because try_reserve didn't fail
         let new_len = original_len + buffer_size;
         vector.resize_with(new_len, Default::default);
-        Ok(Self::Slice(&mut vector[original_len..new_len]))
+        Ok(DataToProcess {
+            buffer: DataToProcessBuffer::Slice(&mut vector[original_len..new_len]),
+            start_index: 0,
+        })
     }
 }
 
@@ -310,7 +422,7 @@ impl MemoryBuffer {
         size: usize,
     ) -> Result<DataToProcess<'a>, HwCryptoError> {
         let mem_buffer = self.get_memory_slice()?;
-        Ok(DataToProcess::VolatileSlice(mem_buffer.subslice(start, size)?))
+        Ok(DataToProcess::new_from_volatile_slice(mem_buffer.subslice(start, size)?))
     }
 }
 
@@ -466,6 +578,14 @@ impl CmdProcessorContext {
         self.operation_step(Some(input_parameters), current_output_ref, false, None)
     }
 
+    fn set_pattern(&mut self, step_parameter: &mut PatternParameters) -> Result<(), HwCryptoError> {
+        let crypto_operation = self
+            .current_crypto_operation
+            .as_mut()
+            .ok_or(hwcrypto_err!(BAD_PARAMETER, "crypto operation has not been set yet"))?;
+        crypto_operation.set_operation_pattern(step_parameter)
+    }
+
     fn operation_step(
         &mut self,
         input_parameters: Option<&mut OperationData>,
@@ -482,7 +602,7 @@ impl CmdProcessorContext {
             ))?;
         }
         // Creating a `DataToProcess` variable to abstract away where the input is located
-        let input = match input_parameters {
+        let mut input = match input_parameters {
             Some(OperationData::MemoryBufferReference(buffer_reference)) => Some({
                 let buffer_reference =
                     MemoryBufferReferenceWithType::Input((*buffer_reference).into());
@@ -493,7 +613,9 @@ impl CmdProcessorContext {
                     .ok_or(hwcrypto_err!(BAD_PARAMETER, "input buffer not set yet"))?
                     .get_subslice_as_data_to_process(input_start, input_size)?
             }),
-            Some(OperationData::DataBuffer(input)) => Some(DataToProcess::Slice(&mut input[..])),
+            Some(OperationData::DataBuffer(input)) => {
+                Some(DataToProcess::new_from_slice(&mut input[..]))
+            }
             None => None,
         };
         if let Some(ref input) = input {
@@ -523,9 +645,10 @@ impl CmdProcessorContext {
                 // We are saving data into a vector, as long as we can resize the vector we can fit
                 // the result
                 let original_size = output_vec.len();
-                let output_buff =
+                let mut output_buff =
                     DataToProcess::allocate_buffer_end_vector(*output_vec, req_output_size)?;
-                let added_bytes = crypto_operation.operation(input, output_buff, is_finish)?;
+                let added_bytes =
+                    crypto_operation.operation(input.as_mut(), &mut output_buff, is_finish)?;
                 output_vec.truncate(original_size + added_bytes);
             }
             OutputData::MemoryReference(output_buff_ref, remaining_size) => {
@@ -544,12 +667,13 @@ impl CmdProcessorContext {
                 // _output_start                output_start_offset                    output_stop
                 //
                 let output_start_offset = output_stop - *remaining_size;
-                let output_slice = self
+                let mut output_slice = self
                     .current_output_memory_buffer
                     .as_mut()
                     .ok_or(hwcrypto_err!(BAD_PARAMETER, "output buffer not set yet"))?
                     .get_subslice_as_data_to_process(output_start_offset, req_output_size)?;
-                let req_output_size = crypto_operation.operation(input, output_slice, is_finish)?;
+                let req_output_size =
+                    crypto_operation.operation(input.as_mut(), &mut output_slice, is_finish)?;
                 *remaining_size = *remaining_size - req_output_size;
             }
         }
@@ -657,8 +781,8 @@ impl CmdProcessorContext {
                         self.current_state = CmdProcessorState::InitialState;
                         self.finish_step(&mut curr_output)?;
                     }
-                    CryptoOperation::SetPattern(_) => {
-                        unimplemented!("SetPattern not implemented yet")
+                    CryptoOperation::SetPattern(step_data) => {
+                        self.set_pattern(step_data)?;
                     }
                     CryptoOperation::DataInput(step_data) => {
                         self.input_step(step_data, &mut curr_output)?;
@@ -690,7 +814,7 @@ impl CmdProcessorContext {
 mod tests {
     use super::*;
     use crate::opaque_key::OpaqueKey;
-    use android_hardware_security_see::aidl::android::hardware::security::see::hwcrypto::{
+    use android_hardware_security_see_hwcrypto::aidl::android::hardware::security::see::hwcrypto::{
         types::{
             AesCipherMode::AesCipherMode, CipherModeParameters::CipherModeParameters, HalErrorCode,
             KeyLifetime::KeyLifetime, KeyType::KeyType, KeyUse::KeyUse,
@@ -707,7 +831,12 @@ mod tests {
     use std::alloc::{alloc_zeroed, dealloc, Layout};
     use std::os::fd::{FromRawFd, OwnedFd};
     use test::{expect, expect_eq};
+    use tipc::Uuid;
 
+    fn connection_info() -> Uuid {
+        // TODO: This is a temporary mock function for testing until we move to use DICE policies.
+        Uuid::new_from_string("f41a7796-975a-4279-8cc4-b73f8820430d").unwrap()
+    }
     /// Structure only intended to use on unit tests. It will allocate a single memory page and
     /// create a memref to it.
     struct TestPageAllocator {
@@ -1047,7 +1176,7 @@ mod tests {
             keyType: KeyType::AES_128_CBC_NO_PADDING,
             keyManagementKey: false,
         };
-        let key = OpaqueKey::generate_opaque_key(&policy);
+        let key = OpaqueKey::generate_opaque_key(&policy, connection_info());
         expect!(key.is_ok(), "couldn't generate key");
         let key = key.unwrap();
         let mode = SymmetricCryptoParameters::Aes(AesCipherMode::Cbc(CipherModeParameters {
@@ -1289,7 +1418,8 @@ mod tests {
             keyType: key_type,
             keyManagementKey: false,
         };
-        let key = OpaqueKey::generate_opaque_key(&policy).expect("couldn't generate key");
+        let key = OpaqueKey::generate_opaque_key(&policy, connection_info())
+            .expect("couldn't generate key");
         let nonce = [0u8; 16];
         let parameters = SymmetricCryptoParameters::Aes(AesCipherMode::Cbc(CipherModeParameters {
             nonce: nonce.into(),
@@ -1339,5 +1469,537 @@ mod tests {
         let decrypted_msg =
             String::from_utf8(decrypted_data).expect("couldn't decode received message");
         expect_eq!(decrypted_msg, "string to be encrypted", "couldn't retrieve original message");
+    }
+
+    #[test]
+    fn data_to_process_slice_based() {
+        let mut data = vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
+
+        let mut slice = DataToProcess::new_from_slice(data.as_mut());
+
+        let mut read_data = [0u8; 2];
+        slice.read_into_slice(&mut read_data, None).expect("couldn't read data");
+
+        expect_eq!(read_data.len(), 2, "advanced data has wrong size");
+        expect_eq!(slice.len(), 8, "advanced data has wrong size");
+        expect_eq!(read_data, [0, 1], "read data had wrong values");
+
+        slice.append_slice(&read_data).expect("couldn't copy data");
+        slice.start_index = 0;
+
+        let mut read_data = [0u8; 10];
+        slice.read_into_slice(&mut read_data, None).expect("couldn't read data");
+        expect_eq!(read_data, [0, 1, 0, 1, 4, 5, 6, 7, 8, 9], "read data had wrong values");
+    }
+
+    #[test]
+    fn copy_slice() {
+        let mut output_page = TestPageAllocator::new().expect("couldn't allocate test page");
+        let mut output_page_2 = TestPageAllocator::new().expect("couldn't allocate test page");
+        output_page_2.copy_values(0, &[20, 21, 22, 23, 24, 25, 26, 27, 28, 29]).unwrap();
+
+        let total_buffer_size = TestPageAllocator::get_allocation_size();
+        let mem_buffer_parameters = MemoryBufferParameter {
+            bufferHandle: MemoryBufferAidl::Output(Some(
+                output_page.get_parcel_file_descriptor().expect("couldn't create fd"),
+            )),
+            sizeBytes: total_buffer_size as i32,
+        };
+        let mut memory_buffer =
+            MemoryBuffer::new(&mem_buffer_parameters).expect("Couldn't createa memory buffer");
+
+        let mem_buffer_parameters = MemoryBufferParameter {
+            bufferHandle: MemoryBufferAidl::Output(Some(
+                output_page_2.get_parcel_file_descriptor().expect("couldn't create fd"),
+            )),
+            sizeBytes: total_buffer_size as i32,
+        };
+        let mut memory_buffer_2 =
+            MemoryBuffer::new(&mem_buffer_parameters).expect("Couldn't createa memory buffer");
+
+        let mut data_to_process = DataToProcess::new_from_volatile_slice(
+            memory_buffer.get_memory_slice().expect("couldn't get memory slice"),
+        );
+
+        let mut data_to_process_2 = DataToProcess::new_from_volatile_slice(
+            memory_buffer_2.get_memory_slice().expect("couldn't get memory slice"),
+        );
+
+        expect_eq!(
+            data_to_process.len(),
+            data_to_process_2.len(),
+            "data to process len should match at this point"
+        );
+        let original_size = data_to_process.len();
+
+        expect_eq!(
+            data_to_process.start_index,
+            data_to_process_2.start_index,
+            "start index of data to process should match"
+        );
+        expect_eq!(data_to_process.start_index, 0, "start index of data to process should be 0");
+
+        data_to_process.read_from_slice(&mut data_to_process_2, Some(3)).expect("couldn't copy");
+        expect_eq!(
+            data_to_process.len(),
+            original_size - 3,
+            "data to process len should have decreased by 3"
+        );
+        expect_eq!(
+            data_to_process_2.len(),
+            original_size - 3,
+            "data to process len should have decreased by 3"
+        );
+        expect_eq!(data_to_process.start_index, 3, "start index of data to process should be 3");
+        expect_eq!(data_to_process_2.start_index, 3, "start index of data to process should be 3");
+
+        let mut read_data = [0u8; 3];
+        data_to_process.start_index = 0;
+        data_to_process.read_into_slice(&mut read_data, None).expect("couldn't read data");
+        expect_eq!(read_data, [20, 21, 22], "wrong data copied");
+
+        data_to_process.read_from_slice(&mut data_to_process_2, Some(0)).expect("couldn't copy");
+        expect_eq!(
+            data_to_process.len(),
+            original_size - 3,
+            "data to process len should have decreased by 3"
+        );
+        expect_eq!(
+            data_to_process_2.len(),
+            original_size - 3,
+            "data to process len should have decreased by 3"
+        );
+        expect_eq!(data_to_process.start_index, 3, "start index of data to process should be 3");
+        expect_eq!(data_to_process_2.start_index, 3, "start index of data to process should be 3");
+
+        let mut read_data = [0u8; 3];
+        data_to_process.start_index = 0;
+        data_to_process.read_into_slice(&mut read_data, None).expect("couldn't read data");
+        expect_eq!(read_data, [20, 21, 22], "wrong data copied");
+
+        data_to_process.read_from_slice(&mut data_to_process_2, Some(4)).expect("couldn't copy");
+        expect_eq!(
+            data_to_process.len(),
+            original_size - 7,
+            "data to process len should have decreased by 4"
+        );
+        expect_eq!(
+            data_to_process_2.len(),
+            original_size - 7,
+            "data to process len should have decreased by 4"
+        );
+        expect_eq!(data_to_process.start_index, 7, "start index of data to process should be 7");
+        expect_eq!(data_to_process_2.start_index, 7, "start index of data to process should be 7");
+
+        let mut read_data = [0u8; 7];
+        data_to_process.start_index = 0;
+        data_to_process.read_into_slice(&mut read_data, None).expect("couldn't read data");
+        expect_eq!(read_data, [20, 21, 22, 23, 24, 25, 26], "wrong data copied");
+
+        let mut data_process_vec = vec![0u8; 2];
+        let mut data_process_slice = DataToProcess::new_from_slice(data_process_vec.as_mut_slice());
+
+        expect_eq!(data_process_slice.len(), 2, "data to process len should be 2");
+        expect_eq!(data_process_slice.start_index, 0, "start index of data to process should be 0");
+
+        data_process_slice.read_from_slice(&mut data_to_process_2, Some(2)).expect("couldn't copy");
+
+        expect_eq!(data_process_slice.len(), 0, "data to process len ahould be 0");
+        expect_eq!(data_process_slice.start_index, 2, "start index of data to process should be 2");
+        expect_eq!(
+            data_to_process_2.len(),
+            original_size - 9,
+            "data to process len should have decreased by 2"
+        );
+        expect_eq!(data_to_process_2.start_index, 9, "start index of data to process should be 9");
+
+        let mut read_data = [0u8; 2];
+        data_process_slice.start_index = 0;
+        data_process_slice.read_into_slice(&mut read_data, None).expect("couldn't read data");
+        expect_eq!(read_data, [27, 28], "wrong data copied");
+        data_process_slice.start_index = 0;
+
+        data_to_process.read_from_slice(&mut data_process_slice, None).expect("couldn't copy");
+        expect_eq!(
+            data_to_process.len(),
+            original_size - 9,
+            "data to process len should have decreased by 2"
+        );
+        expect_eq!(data_to_process.start_index, 9, "start index of data to process should be 9");
+
+        let mut read_data = [0u8; 9];
+        data_to_process.start_index = 0;
+        data_to_process.read_into_slice(&mut read_data, None).expect("couldn't read data");
+        expect_eq!(read_data, [20, 21, 22, 23, 24, 25, 26, 27, 28], "wrong data copied");
+
+        let mut data_process_vec_2 = vec![0u8; 9];
+        let mut data_process_slice_2 =
+            DataToProcess::new_from_slice(data_process_vec_2.as_mut_slice());
+
+        data_process_slice.start_index = 0;
+
+        data_process_slice_2.read_from_slice(&mut data_process_slice, None).expect("couldn't copy");
+
+        let mut read_data = [0u8; 9];
+        data_process_slice_2.start_index = 0;
+        data_process_slice_2.read_into_slice(&mut read_data, None).expect("couldn't read data");
+        expect_eq!(read_data, [27, 28, 0, 0, 0, 0, 0, 0, 0], "wrong data copied");
+    }
+
+    #[test]
+    fn data_to_process_memory_reference_copies() {
+        let mut output_page = TestPageAllocator::new().expect("couldn't allocate test page");
+        let mut output_page_2 = TestPageAllocator::new().expect("couldn't allocate test page");
+        output_page_2.copy_values(0, &[20, 21, 22, 23, 24, 25, 26, 27, 28, 29]).unwrap();
+
+        let total_buffer_size = TestPageAllocator::get_allocation_size();
+        let mem_buffer_parameters = MemoryBufferParameter {
+            bufferHandle: MemoryBufferAidl::Output(Some(
+                output_page.get_parcel_file_descriptor().expect("couldn't create fd"),
+            )),
+            sizeBytes: total_buffer_size as i32,
+        };
+        let mut memory_buffer =
+            MemoryBuffer::new(&mem_buffer_parameters).expect("Couldn't createa memory buffer");
+
+        let mem_buffer_parameters = MemoryBufferParameter {
+            bufferHandle: MemoryBufferAidl::Output(Some(
+                output_page_2.get_parcel_file_descriptor().expect("couldn't create fd"),
+            )),
+            sizeBytes: total_buffer_size as i32,
+        };
+        let mut memory_buffer_2 =
+            MemoryBuffer::new(&mem_buffer_parameters).expect("Couldn't createa memory buffer");
+
+        let mut data_to_process = DataToProcess::new_from_volatile_slice(
+            memory_buffer.get_memory_slice().expect("couldn't get memory slice"),
+        );
+
+        expect_eq!(data_to_process.len(), total_buffer_size, "data to process had the wrong size");
+
+        let res = data_to_process.append_slice(&[0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
+        expect!(res.is_ok(), "Couldn't write slice");
+        data_to_process.start_index = 0;
+
+        let mut read_data = [0u8; 2];
+        data_to_process.read_into_slice(&mut read_data, None).expect("couldn't read data");
+        expect_eq!(read_data, [0, 1], "wrong data read");
+        expect_eq!(
+            data_to_process.len(),
+            total_buffer_size - 2,
+            "data to process had the wrong size"
+        );
+
+        expect_eq!(data_to_process.start_index, 2, "start index should be 2");
+
+        let res = data_to_process.append_slice(&[10, 11]);
+        expect!(res.is_ok(), "Couldn't write slice");
+
+        expect_eq!(data_to_process.start_index, 4, "start index should be 4");
+
+        let mut data_to_process_2 = DataToProcess::new_from_volatile_slice(
+            memory_buffer_2.get_memory_slice().expect("couldn't get memory slice"),
+        );
+
+        let mut read_data = [0u8; 7];
+        data_to_process_2.read_into_slice(&mut read_data, None).expect("couldn't read data");
+        expect_eq!(read_data, [20, 21, 22, 23, 24, 25, 26], "wrong data read");
+        expect_eq!(
+            data_to_process_2.len(),
+            total_buffer_size - 7,
+            "data to process had the wrong size"
+        );
+
+        expect_eq!(data_to_process_2.start_index, 7, "start index should be 7");
+
+        let mut read_data = [0u8; 2];
+        data_to_process_2.read_into_slice(&mut read_data, None).expect("couldn't read data");
+        expect_eq!(read_data, [27, 28], "wrong data read");
+        expect_eq!(
+            data_to_process_2.len(),
+            total_buffer_size - 9,
+            "data to process had the wrong size"
+        );
+
+        let mut data_process_slice = DataToProcess::new_from_slice(&mut read_data);
+        let res = data_to_process.read_from_slice(&mut data_process_slice, None);
+        expect!(res.is_ok(), "Couldn't data to process");
+
+        let mut slice = vec![0; 10];
+        read_slice(&memory_buffer, &mut slice, 0).expect("couldn't get slice");
+        expect_eq!(
+            slice,
+            [0, 1, 10, 11, 27, 28, 6, 7, 8, 9],
+            "wrong value retrieved through slice"
+        );
+    }
+
+    #[test]
+    fn aes_simple_cbcs_test() {
+        let usage = KeyUse::ENCRYPT_DECRYPT;
+        let key_type = KeyType::AES_128_CBC_NO_PADDING;
+        let policy = KeyPolicy {
+            usage,
+            keyLifetime: KeyLifetime::EPHEMERAL,
+            keyPermissions: Vec::new(),
+            keyType: key_type,
+            keyManagementKey: false,
+        };
+        let key = OpaqueKey::generate_opaque_key(&policy, connection_info())
+            .expect("couldn't generate key");
+        let nonce = [0u8; 16];
+        let parameters = SymmetricCryptoParameters::Aes(AesCipherMode::Cbc(CipherModeParameters {
+            nonce: nonce.into(),
+        }));
+        let direction = SymmetricOperation::ENCRYPT;
+        let sym_op_params =
+            SymmetricOperationParameters { key: Some(key.clone()), direction, parameters };
+        let op_params = OperationParameters::SymmetricCrypto(sym_op_params);
+        let mut cmd_list = Vec::<CryptoOperation>::new();
+        let mut cmd_processor = CmdProcessorContext::new();
+        let data_output = OperationData::DataBuffer(Vec::new());
+        cmd_list.push(CryptoOperation::DataOutput(data_output));
+        cmd_list.push(CryptoOperation::SetOperationParameters(op_params));
+        cmd_list.push(CryptoOperation::SetPattern(PatternParameters {
+            numberBlocksProcess: 1,
+            numberBlocksCopy: 9,
+        }));
+        let input_data =
+            OperationData::DataBuffer("encryption data.0123456789abcdef".as_bytes().to_vec());
+        cmd_list.push(CryptoOperation::DataInput(input_data));
+        let input_data =
+            OperationData::DataBuffer("fedcba98765432100123456789abcdef".as_bytes().to_vec());
+        cmd_list.push(CryptoOperation::DataInput(input_data));
+        let input_data =
+            OperationData::DataBuffer("fedcba98765432100123456789abcdef".as_bytes().to_vec());
+        cmd_list.push(CryptoOperation::DataInput(input_data));
+        let input_data =
+            OperationData::DataBuffer("fedcba98765432100123456789abcdef".as_bytes().to_vec());
+        cmd_list.push(CryptoOperation::DataInput(input_data));
+        let input_data = OperationData::DataBuffer(
+            "fedcba98765432100123456789abcdefProtectedSection".as_bytes().to_vec(),
+        );
+        cmd_list.push(CryptoOperation::DataInput(input_data));
+        cmd_list.push(CryptoOperation::Finish(None));
+        let process_result = cmd_processor.process_all_steps(&mut cmd_list);
+        expect!(process_result.is_ok(), "Couldn't process command");
+        let CryptoOperation::DataOutput(OperationData::DataBuffer(encrypted_data)) =
+            cmd_list.remove(0)
+        else {
+            panic!("not reachable, we created this object above on the test");
+        };
+        let clear_encrypted_msg =
+            String::from_utf8(encrypted_data[16..encrypted_data.len() - 16].to_vec())
+                .expect("couldn't decode received message");
+        expect_eq!(
+            clear_encrypted_msg,
+            "0123456789abcdeffedcba98765432100123456789abcdeffedcba9876543210\
+            0123456789abcdeffedcba98765432100123456789abcdeffedcba98765432100123456789abcdef",
+            "couldn't retrieve clear portion"
+        );
+
+        // Decrypting
+        let parameters = SymmetricCryptoParameters::Aes(AesCipherMode::Cbc(CipherModeParameters {
+            nonce: nonce.into(),
+        }));
+        let direction = SymmetricOperation::DECRYPT;
+        let sym_op_params =
+            SymmetricOperationParameters { key: Some(key.clone()), direction, parameters };
+        let op_params = OperationParameters::SymmetricCrypto(sym_op_params);
+        let mut cmd_list = Vec::<CryptoOperation>::new();
+        let mut cmd_processor = CmdProcessorContext::new();
+        let data_output = OperationData::DataBuffer(Vec::new());
+        cmd_list.push(CryptoOperation::DataOutput(data_output));
+        cmd_list.push(CryptoOperation::SetOperationParameters(op_params));
+        cmd_list.push(CryptoOperation::SetPattern(PatternParameters {
+            numberBlocksProcess: 1,
+            numberBlocksCopy: 9,
+        }));
+        cmd_list.push(CryptoOperation::DataInput(OperationData::DataBuffer(encrypted_data)));
+        cmd_list.push(CryptoOperation::Finish(None));
+        let process_result = cmd_processor.process_all_steps(&mut cmd_list);
+        expect!(process_result.is_ok(), "Couldn't process command");
+        let CryptoOperation::DataOutput(OperationData::DataBuffer(decrypted_data)) =
+            cmd_list.remove(0)
+        else {
+            panic!("not reachable, we created this object above on the test");
+        };
+        let decrypted_msg =
+            String::from_utf8(decrypted_data).expect("couldn't decode received message");
+        expect_eq!(
+            decrypted_msg,
+            "encryption data.0123456789abcdeffedcba9876543210\
+            0123456789abcdeffedcba98765432100123456789abcdeffedcba9876543210\
+            0123456789abcdeffedcba98765432100123456789abcdefProtectedSection",
+            "couldn't retrieve original message"
+        );
+    }
+
+    #[test]
+    fn check_cbcs_wrong_key_types() {
+        let usage = KeyUse::ENCRYPT_DECRYPT;
+        let policy = KeyPolicy {
+            usage,
+            keyLifetime: KeyLifetime::EPHEMERAL,
+            keyPermissions: Vec::new(),
+            keyType: KeyType::AES_128_CBC_PKCS7_PADDING,
+            keyManagementKey: false,
+        };
+        let key = OpaqueKey::generate_opaque_key(&policy, connection_info())
+            .expect("couldn't generate key");
+        let nonce = [0u8; 16];
+        let parameters = SymmetricCryptoParameters::Aes(AesCipherMode::Cbc(CipherModeParameters {
+            nonce: nonce.into(),
+        }));
+        let direction = SymmetricOperation::ENCRYPT;
+        let sym_op_params = SymmetricOperationParameters { key: Some(key), direction, parameters };
+        let op_params = OperationParameters::SymmetricCrypto(sym_op_params);
+        let mut cmd_list = Vec::<CryptoOperation>::new();
+        let mut cmd_processor = CmdProcessorContext::new();
+        let data_output = OperationData::DataBuffer(Vec::new());
+        cmd_list.push(CryptoOperation::DataOutput(data_output));
+        cmd_list.push(CryptoOperation::SetOperationParameters(op_params));
+        cmd_list.push(CryptoOperation::SetPattern(PatternParameters {
+            numberBlocksProcess: 1,
+            numberBlocksCopy: 9,
+        }));
+        let process_result = cmd_processor.process_all_steps(&mut cmd_list);
+        expect!(process_result.is_err(), "Should not be able to use cbcs mode with this key type");
+
+        let policy = KeyPolicy {
+            usage,
+            keyLifetime: KeyLifetime::EPHEMERAL,
+            keyPermissions: Vec::new(),
+            keyType: KeyType::AES_256_CBC_NO_PADDING,
+            keyManagementKey: false,
+        };
+        let key = OpaqueKey::generate_opaque_key(&policy, connection_info())
+            .expect("couldn't generate key");
+        let parameters = SymmetricCryptoParameters::Aes(AesCipherMode::Cbc(CipherModeParameters {
+            nonce: nonce.into(),
+        }));
+        let sym_op_params = SymmetricOperationParameters { key: Some(key), direction, parameters };
+        let op_params = OperationParameters::SymmetricCrypto(sym_op_params);
+        let mut cmd_list = Vec::<CryptoOperation>::new();
+        let mut cmd_processor = CmdProcessorContext::new();
+        let data_output = OperationData::DataBuffer(Vec::new());
+        cmd_list.push(CryptoOperation::DataOutput(data_output));
+        cmd_list.push(CryptoOperation::SetOperationParameters(op_params));
+        cmd_list.push(CryptoOperation::SetPattern(PatternParameters {
+            numberBlocksProcess: 1,
+            numberBlocksCopy: 9,
+        }));
+        let process_result = cmd_processor.process_all_steps(&mut cmd_list);
+        expect!(process_result.is_err(), "Should not be able to use cbcs mode with this key type");
+    }
+
+    #[test]
+    fn aes_simple_all_encrypted_cbcs_test() {
+        let usage = KeyUse::ENCRYPT_DECRYPT;
+        let key_type = KeyType::AES_128_CBC_NO_PADDING;
+        let policy = KeyPolicy {
+            usage,
+            keyLifetime: KeyLifetime::EPHEMERAL,
+            keyPermissions: Vec::new(),
+            keyType: key_type,
+            keyManagementKey: false,
+        };
+        let key = OpaqueKey::generate_opaque_key(&policy, connection_info())
+            .expect("couldn't generate key");
+        let nonce = [0u8; 16];
+        let parameters = SymmetricCryptoParameters::Aes(AesCipherMode::Cbc(CipherModeParameters {
+            nonce: nonce.into(),
+        }));
+        let direction = SymmetricOperation::ENCRYPT;
+        let sym_op_params =
+            SymmetricOperationParameters { key: Some(key.clone()), direction, parameters };
+        let op_params = OperationParameters::SymmetricCrypto(sym_op_params);
+        let mut cmd_list = Vec::<CryptoOperation>::new();
+        let mut cmd_processor = CmdProcessorContext::new();
+        let data_output = OperationData::DataBuffer(Vec::new());
+        cmd_list.push(CryptoOperation::DataOutput(data_output));
+        cmd_list.push(CryptoOperation::SetOperationParameters(op_params));
+        cmd_list.push(CryptoOperation::SetPattern(PatternParameters {
+            numberBlocksProcess: 1,
+            numberBlocksCopy: 0,
+        }));
+        let input_data =
+            OperationData::DataBuffer("encryption data.0123456789abcdef".as_bytes().to_vec());
+        cmd_list.push(CryptoOperation::DataInput(input_data));
+        let input_data =
+            OperationData::DataBuffer("fedcba98765432100123456789abcdef".as_bytes().to_vec());
+        cmd_list.push(CryptoOperation::DataInput(input_data));
+        cmd_list.push(CryptoOperation::Finish(None));
+        let process_result = cmd_processor.process_all_steps(&mut cmd_list);
+        expect!(process_result.is_ok(), "Couldn't process command");
+        let CryptoOperation::DataOutput(OperationData::DataBuffer(encrypted_data)) =
+            cmd_list.remove(0)
+        else {
+            panic!("not reachable, we created this object above on the test");
+        };
+
+        // Checking that encrypting with patter 0,0 is equivalent to pattern 1,0
+        let parameters = SymmetricCryptoParameters::Aes(AesCipherMode::Cbc(CipherModeParameters {
+            nonce: nonce.into(),
+        }));
+        let direction = SymmetricOperation::ENCRYPT;
+        let sym_op_params =
+            SymmetricOperationParameters { key: Some(key.clone()), direction, parameters };
+        let op_params = OperationParameters::SymmetricCrypto(sym_op_params);
+        let mut cmd_list = Vec::<CryptoOperation>::new();
+        let mut cmd_processor = CmdProcessorContext::new();
+        let data_output = OperationData::DataBuffer(Vec::new());
+        cmd_list.push(CryptoOperation::DataOutput(data_output));
+        cmd_list.push(CryptoOperation::SetOperationParameters(op_params));
+        cmd_list.push(CryptoOperation::SetPattern(PatternParameters {
+            numberBlocksProcess: 0,
+            numberBlocksCopy: 0,
+        }));
+        let input_data =
+            OperationData::DataBuffer("encryption data.0123456789abcdef".as_bytes().to_vec());
+        cmd_list.push(CryptoOperation::DataInput(input_data));
+        let input_data =
+            OperationData::DataBuffer("fedcba98765432100123456789abcdef".as_bytes().to_vec());
+        cmd_list.push(CryptoOperation::DataInput(input_data));
+        cmd_list.push(CryptoOperation::Finish(None));
+        let process_result = cmd_processor.process_all_steps(&mut cmd_list);
+        expect!(process_result.is_ok(), "Couldn't process command");
+        let CryptoOperation::DataOutput(OperationData::DataBuffer(encrypted_data1)) =
+            cmd_list.remove(0)
+        else {
+            panic!("not reachable, we created this object above on the test");
+        };
+        assert_eq!(encrypted_data, encrypted_data1, "encrypted data should match");
+
+        // Decrypting
+        let parameters = SymmetricCryptoParameters::Aes(AesCipherMode::Cbc(CipherModeParameters {
+            nonce: nonce.into(),
+        }));
+        let direction = SymmetricOperation::DECRYPT;
+        let sym_op_params =
+            SymmetricOperationParameters { key: Some(key.clone()), direction, parameters };
+        let op_params = OperationParameters::SymmetricCrypto(sym_op_params);
+        let mut cmd_list = Vec::<CryptoOperation>::new();
+        let mut cmd_processor = CmdProcessorContext::new();
+        let data_output = OperationData::DataBuffer(Vec::new());
+        cmd_list.push(CryptoOperation::DataOutput(data_output));
+        cmd_list.push(CryptoOperation::SetOperationParameters(op_params));
+        cmd_list.push(CryptoOperation::DataInput(OperationData::DataBuffer(encrypted_data)));
+        cmd_list.push(CryptoOperation::Finish(None));
+        let process_result = cmd_processor.process_all_steps(&mut cmd_list);
+        expect!(process_result.is_ok(), "Couldn't process command");
+        let CryptoOperation::DataOutput(OperationData::DataBuffer(decrypted_data)) =
+            cmd_list.remove(0)
+        else {
+            panic!("not reachable, we created this object above on the test");
+        };
+        let decrypted_msg =
+            String::from_utf8(decrypted_data).expect("couldn't decode received message");
+        expect_eq!(
+            decrypted_msg,
+            "encryption data.0123456789abcdeffedcba9876543210\
+            0123456789abcdef",
+            "couldn't retrieve original message"
+        );
     }
 }
