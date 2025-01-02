@@ -97,7 +97,7 @@ mod tests {
         // Derive a clear key from returned current policy and derivation key
         let mut params = DerivedKeyParameters {
             derivationKey: derivation_key1,
-            keyPolicy: DerivedKeyPolicy::ClearKey(ClearKeyPolicy { keySizeBytes: 256 }),
+            keyPolicy: DerivedKeyPolicy::ClearKeyPolicy(ClearKeyPolicy { keySizeBytes: 256 }),
             context: "context".as_bytes().to_vec(),
         };
 
@@ -195,7 +195,7 @@ mod tests {
         // Derive clear key from derivation key
         let params = DerivedKeyParameters {
             derivationKey: derivation_key,
-            keyPolicy: DerivedKeyPolicy::ClearKey(ClearKeyPolicy { keySizeBytes: 256 }),
+            keyPolicy: DerivedKeyPolicy::ClearKeyPolicy(ClearKeyPolicy { keySizeBytes: 256 }),
             context: "context".as_bytes().to_vec(),
         };
 
@@ -258,7 +258,7 @@ mod tests {
         // Generate derived clear keys from returned derivation keys
         let params = DerivedKeyParameters {
             derivationKey: derivation_key1,
-            keyPolicy: DerivedKeyPolicy::ClearKey(ClearKeyPolicy { keySizeBytes: 256 }),
+            keyPolicy: DerivedKeyPolicy::ClearKeyPolicy(ClearKeyPolicy { keySizeBytes: 256 }),
             context: "context".as_bytes().to_vec(),
         };
 
@@ -266,7 +266,7 @@ mod tests {
 
         let params = DerivedKeyParameters {
             derivationKey: derivation_key2,
-            keyPolicy: DerivedKeyPolicy::ClearKey(ClearKeyPolicy { keySizeBytes: 256 }),
+            keyPolicy: DerivedKeyPolicy::ClearKeyPolicy(ClearKeyPolicy { keySizeBytes: 256 }),
             context: "context".as_bytes().to_vec(),
         };
 
@@ -326,13 +326,13 @@ mod tests {
 
         let params1 = DerivedKeyParameters {
             derivationKey: derivation_key.clone(),
-            keyPolicy: DerivedKeyPolicy::ClearKey(ClearKeyPolicy { keySizeBytes: 256 }),
+            keyPolicy: DerivedKeyPolicy::ClearKeyPolicy(ClearKeyPolicy { keySizeBytes: 256 }),
             context: context1.as_bytes().to_vec(),
         };
 
         let params2 = DerivedKeyParameters {
             derivationKey: derivation_key.clone(),
-            keyPolicy: DerivedKeyPolicy::ClearKey(ClearKeyPolicy { keySizeBytes: 256 }),
+            keyPolicy: DerivedKeyPolicy::ClearKeyPolicy(ClearKeyPolicy { keySizeBytes: 256 }),
             context: context2.as_bytes().to_vec(),
         };
 
@@ -382,7 +382,7 @@ mod tests {
         // Request a zero length key
         let params = DerivedKeyParameters {
             derivationKey: derivation_key.clone(),
-            keyPolicy: DerivedKeyPolicy::ClearKey(ClearKeyPolicy { keySizeBytes: 0 }),
+            keyPolicy: DerivedKeyPolicy::ClearKeyPolicy(ClearKeyPolicy { keySizeBytes: 0 }),
             context: "context".as_bytes().to_vec(),
         };
 
@@ -392,7 +392,7 @@ mod tests {
         // Request a negative length key
         let params = DerivedKeyParameters {
             derivationKey: derivation_key.clone(),
-            keyPolicy: DerivedKeyPolicy::ClearKey(ClearKeyPolicy { keySizeBytes: -256 }),
+            keyPolicy: DerivedKeyPolicy::ClearKeyPolicy(ClearKeyPolicy { keySizeBytes: -256 }),
             context: "context".as_bytes().to_vec(),
         };
 
@@ -426,7 +426,7 @@ mod tests {
         // Get a derived key based on large context
         let params = DerivedKeyParameters {
             derivationKey: derivation_key.clone(),
-            keyPolicy: DerivedKeyPolicy::ClearKey(ClearKeyPolicy { keySizeBytes: 256 }),
+            keyPolicy: DerivedKeyPolicy::ClearKeyPolicy(ClearKeyPolicy { keySizeBytes: 256 }),
             context: context.clone(),
         };
 
@@ -445,7 +445,7 @@ mod tests {
 
         let params = DerivedKeyParameters {
             derivationKey: derivation_key.clone(),
-            keyPolicy: DerivedKeyPolicy::ClearKey(ClearKeyPolicy { keySizeBytes: 256 }),
+            keyPolicy: DerivedKeyPolicy::ClearKeyPolicy(ClearKeyPolicy { keySizeBytes: 256 }),
             context: context.clone(),
         };
 
