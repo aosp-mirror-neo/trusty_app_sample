@@ -17,7 +17,7 @@
 mod tests {
     pub(crate) const RUST_HWCRYPTO_SERVICE_PORT: &str = "com.android.trusty.rust.hwcryptohal.V1";
 
-    use android_hardware_security_see::aidl::android::hardware::security::see::hwcrypto::{
+    use android_hardware_security_see_hwcrypto::aidl::android::hardware::security::see::hwcrypto::{
         types::{
             AesCipherMode::AesCipherMode, AesKey::AesKey,
             CipherModeParameters::CipherModeParameters, ExplicitKeyMaterial::ExplicitKeyMaterial,
@@ -27,7 +27,6 @@ mod tests {
             SymmetricOperationParameters::SymmetricOperationParameters,
         },
         CryptoOperation::CryptoOperation,
-        CryptoOperationErrorAdditionalInfo::CryptoOperationErrorAdditionalInfo,
         CryptoOperationSet::CryptoOperationSet,
         ICryptoOperationContext::ICryptoOperationContext,
         IHwCryptoKey::IHwCryptoKey,
@@ -312,11 +311,9 @@ mod tests {
                 CryptoOperationSet { context: context.clone(), operations: cmd_list };
             let mut crypto_sets = Vec::new();
             crypto_sets.push(crypto_op_set);
-            let mut additional_error_info =
-                CryptoOperationErrorAdditionalInfo { failingCommandIndex: 0 };
 
             let mut op_result = hw_crypto_ops
-                .processCommandList(&mut crypto_sets, &mut additional_error_info)
+                .processCommandList(&mut crypto_sets)
                 .expect("couldn't process commands");
 
             // Capture context to be used with CTR vectors whenever we have a new IV
