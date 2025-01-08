@@ -25,7 +25,6 @@ mod tests {
             SymmetricOperationParameters::SymmetricOperationParameters,
         },
         CryptoOperation::CryptoOperation,
-        CryptoOperationErrorAdditionalInfo::CryptoOperationErrorAdditionalInfo,
         CryptoOperationSet::CryptoOperationSet,
         IHwCryptoKey::{
             DerivedKey::DerivedKey, DerivedKeyParameters::DerivedKeyParameters,
@@ -97,9 +96,7 @@ mod tests {
         let mut crypto_sets = Vec::new();
         crypto_sets.push(crypto_op_set);
 
-        let mut additional_error_info =
-            CryptoOperationErrorAdditionalInfo { failingCommandIndex: 0 };
-        let result = hw_crypto.processCommandList(&mut crypto_sets, &mut additional_error_info);
+        let result = hw_crypto.processCommandList(&mut crypto_sets);
         match result {
             Ok(..) => {}
             Err(e) => return Err(e),
