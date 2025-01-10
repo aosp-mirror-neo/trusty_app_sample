@@ -2002,4 +2002,93 @@ mod tests {
             "couldn't retrieve original message"
         );
     }
+
+    #[test]
+    fn aes_simple_cbcs_test_non_block_multiple() {
+        let usage = KeyUse::ENCRYPT_DECRYPT;
+        let key_type = KeyType::AES_128_CBC_NO_PADDING;
+        let policy = KeyPolicy {
+            usage,
+            keyLifetime: KeyLifetime::EPHEMERAL,
+            keyPermissions: Vec::new(),
+            keyType: key_type,
+            keyManagementKey: false,
+        };
+        let key = OpaqueKey::generate_opaque_key(&policy, connection_info())
+            .expect("couldn't generate key");
+        let nonce = [0u8; 16];
+        let parameters = SymmetricCryptoParameters::Aes(AesCipherMode::Cbc(CipherModeParameters {
+            nonce: nonce.into(),
+        }));
+        let direction = SymmetricOperation::ENCRYPT;
+        let sym_op_params =
+            SymmetricOperationParameters { key: Some(key.clone()), direction, parameters };
+        let op_params = OperationParameters::SymmetricCrypto(sym_op_params);
+        let mut cmd_list = Vec::<CryptoOperation>::new();
+        let mut cmd_processor = CmdProcessorContext::new();
+        let data_output = OperationData::DataBuffer(Vec::new());
+        cmd_list.push(CryptoOperation::DataOutput(data_output));
+        cmd_list.push(CryptoOperation::SetOperationParameters(op_params));
+        cmd_list.push(CryptoOperation::SetPattern(PatternParameters {
+            numberBlocksProcess: 1,
+            numberBlocksCopy: 0,
+        }));
+        let input_data =
+            OperationData::DataBuffer("encryption data.0123456789abcdef".as_bytes().to_vec());
+        cmd_list.push(CryptoOperation::DataInput(input_data));
+        let input_data =
+            OperationData::DataBuffer("fedcba98765432100123456789abcdef".as_bytes().to_vec());
+        cmd_list.push(CryptoOperation::DataInput(input_data));
+        let input_data = OperationData::DataBuffer("unencrypted".as_bytes().to_vec());
+        cmd_list.push(CryptoOperation::DataInput(input_data));
+        cmd_list.push(CryptoOperation::Finish(None));
+        let process_result = cmd_processor.process_all_steps(&mut cmd_list);
+        expect!(process_result.is_ok(), "Couldn't process command");
+        let CryptoOperation::DataOutput(OperationData::DataBuffer(encrypted_data)) =
+            cmd_list.remove(0)
+        else {
+            panic!("not reachable, we created this object above on the test");
+        };
+
+        let clear_encrypted_msg = String::from_utf8(
+            encrypted_data[encrypted_data.len() - "unencrypted".len()..].to_vec(),
+        )
+        .expect("couldn't decode message");
+        expect_eq!(clear_encrypted_msg, "unencrypted");
+
+        // Decrypting
+        let parameters = SymmetricCryptoParameters::Aes(AesCipherMode::Cbc(CipherModeParameters {
+            nonce: nonce.into(),
+        }));
+        let direction = SymmetricOperation::DECRYPT;
+        let sym_op_params =
+            SymmetricOperationParameters { key: Some(key.clone()), direction, parameters };
+        let op_params = OperationParameters::SymmetricCrypto(sym_op_params);
+        let mut cmd_list = Vec::<CryptoOperation>::new();
+        let mut cmd_processor = CmdProcessorContext::new();
+        let data_output = OperationData::DataBuffer(Vec::new());
+        cmd_list.push(CryptoOperation::DataOutput(data_output));
+        cmd_list.push(CryptoOperation::SetOperationParameters(op_params));
+        cmd_list.push(CryptoOperation::SetPattern(PatternParameters {
+            numberBlocksProcess: 1,
+            numberBlocksCopy: 0,
+        }));
+        cmd_list.push(CryptoOperation::DataInput(OperationData::DataBuffer(encrypted_data)));
+        cmd_list.push(CryptoOperation::Finish(None));
+        let process_result = cmd_processor.process_all_steps(&mut cmd_list);
+        expect!(process_result.is_ok(), "Couldn't process command");
+        let CryptoOperation::DataOutput(OperationData::DataBuffer(decrypted_data)) =
+            cmd_list.remove(0)
+        else {
+            panic!("not reachable, we created this object above on the test");
+        };
+        let decrypted_msg =
+            String::from_utf8(decrypted_data).expect("couldn't decode received message");
+        expect_eq!(
+            decrypted_msg,
+            "encryption data.0123456789abcdeffedcba9876543210\
+            0123456789abcdefunencrypted",
+            "couldn't retrieve original message"
+        );
+    }
 }
