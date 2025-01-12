@@ -27,7 +27,6 @@ mod tests {
             SymmetricOperationParameters::SymmetricOperationParameters,
         },
         CryptoOperation::CryptoOperation,
-        CryptoOperationErrorAdditionalInfo::CryptoOperationErrorAdditionalInfo,
         CryptoOperationSet::CryptoOperationSet,
         ICryptoOperationContext::ICryptoOperationContext,
         IHwCryptoKey::IHwCryptoKey,
@@ -312,11 +311,9 @@ mod tests {
                 CryptoOperationSet { context: context.clone(), operations: cmd_list };
             let mut crypto_sets = Vec::new();
             crypto_sets.push(crypto_op_set);
-            let mut additional_error_info =
-                CryptoOperationErrorAdditionalInfo { failingCommandIndex: 0 };
 
             let mut op_result = hw_crypto_ops
-                .processCommandList(&mut crypto_sets, &mut additional_error_info)
+                .processCommandList(&mut crypto_sets)
                 .expect("couldn't process commands");
 
             // Capture context to be used with CTR vectors whenever we have a new IV

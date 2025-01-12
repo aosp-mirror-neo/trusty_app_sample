@@ -212,7 +212,8 @@ impl HwCryptoKey {
         check_dice_policy_owner: bool,
     ) -> Result<DiceBoundKeyResult, HwCryptoError> {
         // Verifying provided DICE policy
-        let connection_info = ConnectionInformation { uuid: self.uuid.clone() };
+        let connection_info: ConnectionInformation =
+            ConnectionInformation { uuid: self.uuid.clone() };
         if check_dice_policy_owner {
             VersionContext::check_encrypted_context(dice_policy_for_key_version, connection_info)?;
         }
@@ -346,7 +347,7 @@ impl IHwCryptoKey for HwCryptoKey {
     }
 
     fn deriveKey(&self, parameters: &DerivedKeyParameters) -> binder::Result<DerivedKey> {
-        if let DerivedKeyPolicy::ClearKey(policy) = &parameters.keyPolicy {
+        if let DerivedKeyPolicy::ClearKeyPolicy(policy) = &parameters.keyPolicy {
             if policy.keySizeBytes <= 0 {
                 return Err(binder::Status::new_exception_str(
                     binder::ExceptionCode::UNSUPPORTED_OPERATION,
@@ -365,7 +366,7 @@ impl IHwCryptoKey for HwCryptoKey {
             .try_into()?;
 
         match &parameters.keyPolicy {
-            DerivedKeyPolicy::ClearKey(clear_policy) => {
+            DerivedKeyPolicy::ClearKeyPolicy(clear_policy) => {
                 // Adding key size to the context as well for a similar reason as to add the key
                 // policy to the context.
                 let key_size = clear_policy.keySizeBytes.try_into().map_err(|_| {
@@ -443,7 +444,6 @@ mod tests {
             SymmetricOperationParameters::SymmetricOperationParameters,
         },
         CryptoOperation::CryptoOperation,
-        CryptoOperationErrorAdditionalInfo::CryptoOperationErrorAdditionalInfo,
         CryptoOperationSet::CryptoOperationSet,
         IHwCryptoKey::ClearKeyPolicy::ClearKeyPolicy,
         OperationParameters::OperationParameters,
@@ -487,11 +487,7 @@ mod tests {
         let crypto_op_set = CryptoOperationSet { context: None, operations: cmd_list };
         let mut crypto_sets = Vec::new();
         crypto_sets.push(crypto_op_set);
-        let mut additional_error_info =
-            CryptoOperationErrorAdditionalInfo { failingCommandIndex: 0 };
-        hw_crypto
-            .processCommandList(&mut crypto_sets, &mut additional_error_info)
-            .expect("couldn't process commands");
+        hw_crypto.processCommandList(&mut crypto_sets).expect("couldn't process commands");
         // Extracting the vector from the command list because of ownership
         let CryptoOperation::DataOutput(OperationData::DataBuffer(encrypted_data)) =
             crypto_sets.remove(0).operations.remove(0)
@@ -515,9 +511,7 @@ mod tests {
         let crypto_op_set = CryptoOperationSet { context: None, operations: cmd_list };
         let mut crypto_sets = Vec::new();
         crypto_sets.push(crypto_op_set);
-        hw_crypto
-            .processCommandList(&mut crypto_sets, &mut additional_error_info)
-            .expect("couldn't process commands");
+        hw_crypto.processCommandList(&mut crypto_sets).expect("couldn't process commands");
         // Extracting the vector from the command list because of ownership
         let CryptoOperation::DataOutput(OperationData::DataBuffer(decrypted_data)) =
             crypto_sets.remove(0).operations.remove(0)
@@ -560,11 +554,7 @@ mod tests {
         let crypto_op_set = CryptoOperationSet { context: None, operations: cmd_list };
         let mut crypto_sets = Vec::new();
         crypto_sets.push(crypto_op_set);
-        let mut additional_error_info =
-            CryptoOperationErrorAdditionalInfo { failingCommandIndex: 0 };
-        hw_crypto
-            .processCommandList(&mut crypto_sets, &mut additional_error_info)
-            .expect("couldn't process commands");
+        hw_crypto.processCommandList(&mut crypto_sets).expect("couldn't process commands");
         // Extracting the vector from the command list because of ownership
         let CryptoOperation::DataOutput(OperationData::DataBuffer(mac)) =
             crypto_sets.remove(0).operations.remove(0)
@@ -628,7 +618,7 @@ mod tests {
         expect!(key.is_some(), "should have received a key");
         expect!(policy.len() > 0, "should have received a DICE policy");
 
-        let clear_key_policy = DerivedKeyPolicy::ClearKey(ClearKeyPolicy { keySizeBytes: 0 });
+        let clear_key_policy = DerivedKeyPolicy::ClearKeyPolicy(ClearKeyPolicy { keySizeBytes: 0 });
         let mut params = DerivedKeyParameters {
             derivationKey: key,
             keyPolicy: clear_key_policy,
@@ -637,7 +627,8 @@ mod tests {
         let key = hw_device_key.deriveKey(&params);
         expect!(key.is_err(), "shouldn't be able to create a key of length 0");
 
-        let clear_key_policy = DerivedKeyPolicy::ClearKey(ClearKeyPolicy { keySizeBytes: 32 });
+        let clear_key_policy =
+            DerivedKeyPolicy::ClearKeyPolicy(ClearKeyPolicy { keySizeBytes: 32 });
         params.keyPolicy = clear_key_policy;
         let derived_key = assert_ok!(hw_device_key.deriveKey(&params));
         let key1 = match derived_key {
@@ -710,11 +701,7 @@ mod tests {
         let crypto_op_set = CryptoOperationSet { context: None, operations: cmd_list };
         let mut crypto_sets = Vec::new();
         crypto_sets.push(crypto_op_set);
-        let mut additional_error_info =
-            CryptoOperationErrorAdditionalInfo { failingCommandIndex: 0 };
-        hw_crypto
-            .processCommandList(&mut crypto_sets, &mut additional_error_info)
-            .expect("couldn't process commands");
+        hw_crypto.processCommandList(&mut crypto_sets).expect("couldn't process commands");
         // Extracting the vector from the command list because of ownership
         let CryptoOperation::DataOutput(OperationData::DataBuffer(encrypted_data)) =
             crypto_sets.remove(0).operations.remove(0)
@@ -745,9 +732,7 @@ mod tests {
         let crypto_op_set = CryptoOperationSet { context: None, operations: cmd_list };
         let mut crypto_sets = Vec::new();
         crypto_sets.push(crypto_op_set);
-        hw_crypto
-            .processCommandList(&mut crypto_sets, &mut additional_error_info)
-            .expect("couldn't process commands");
+        hw_crypto.processCommandList(&mut crypto_sets).expect("couldn't process commands");
         // Extracting the vector from the command list because of ownership
         let CryptoOperation::DataOutput(OperationData::DataBuffer(decrypted_data)) =
             crypto_sets.remove(0).operations.remove(0)
