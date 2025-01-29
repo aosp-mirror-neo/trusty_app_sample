@@ -396,14 +396,12 @@ impl AesOperation {
         input: &mut DataToProcess<'a>,
         output: &mut DataToProcess<'a>,
     ) -> Result<usize, HwCryptoError> {
-        let total_size = input.len();
-        if (total_size % crypto::aes::BLOCK_SIZE) != 0 {
-            return Err(hwcrypto_err!(
-                BAD_PARAMETER,
-                "input size was not multiple of {}: {}",
-                crypto::aes::BLOCK_SIZE,
-                input.len()
-            ));
+        let mut total_pattern_size = input.len();
+        let unencrypted_bytes_last_block = total_pattern_size % crypto::aes::BLOCK_SIZE;
+        if unencrypted_bytes_last_block != 0 {
+            // on cbcs if there are remainders on the last block, then those need to be directly
+            // copied, they will be unencrypted
+            total_pattern_size -= unencrypted_bytes_last_block;
         }
         if output.len() != input.len() {
             return Err(hwcrypto_err!(BAD_PARAMETER, "output size was not {}", input.len()));
@@ -414,7 +412,7 @@ impl AesOperation {
             .ok_or(hwcrypto_err!(BAD_PARAMETER, "not a cbcs operation"))?;
         // TODO: refactor to remove need of input copy for memory slices
         let mut input_buff = TempBuffer::new();
-        let mut remaining_len = total_size;
+        let mut remaining_len = total_pattern_size;
         let aes_op = self
             .emitting_op
             .as_mut()
@@ -474,7 +472,10 @@ impl AesOperation {
                 }
             }
         }
-        Ok(total_size)
+        if unencrypted_bytes_last_block != 0 {
+            output.read_from_slice(input, Some(unencrypted_bytes_last_block))?;
+        }
+        Ok(total_pattern_size + unencrypted_bytes_last_block)
     }
 }
 
@@ -545,16 +546,9 @@ impl IBaseCryptoOperation for AesOperation {
 
     fn get_req_size_update(&self, input: &DataToProcess) -> Result<usize, HwCryptoError> {
         if self.cbcs_pattern.is_some() {
-            // On CBCS patterns we are currently processing a number of bytes multiple of block
-            // sizes, so the space needed is always the size of the input.
-            if (input.len() % crypto::aes::BLOCK_SIZE) != 0 {
-                return Err(hwcrypto_err!(
-                    BAD_PARAMETER,
-                    "input size was not multiple of {}: {}",
-                    crypto::aes::BLOCK_SIZE,
-                    input.len()
-                ));
-            }
+            // On CBCS patterns we are currently processing all the input at once (remaining bytes
+            // that are not multiples of a block are copied unencrypted) so the space needed is
+            // always the size of the input.
             Ok(input.len())
         } else {
             let (req_size, _) = self.get_update_req_size_with_remainder(input)?;
