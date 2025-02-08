@@ -16,9 +16,10 @@
 
 //! Library implementing common client and server HWCrypto functionality.
 
-pub mod cose;
+mod android;
 pub mod err;
 pub mod policy;
+pub use android::{AES_SYMMETRIC_KEY_USES_MASK, HMAC_KEY_USES_MASK};
 
 // Trusty Rust unittests use a sligthly different setup and environment than
 // normal Rust unittests. The next call adds the necessary variables and code to be
