@@ -20,7 +20,8 @@
 use ciborium::Value;
 use coset::{AsCborValue, CborSerializable, Header, ProtectedHeader};
 use hwcryptohal_common::{err::HwCryptoError, hwcrypto_err};
-use hwkey::{Hwkey, OsRollbackVersion, RollbackVersionSource};
+use hwcryptohalinterfaces::DeviceKeys;
+use hwcryptohalplatform::DeviceKeysImpl;
 use kmr_common::{
     crypto::{self, Aes, Hkdf, Rng},
     FallibleAllocExt,
@@ -103,14 +104,14 @@ impl From<EncryptedContent> for ciborium::value::Integer {
 // similar to what KeyMint does to wrap keys.
 pub(crate) struct EncryptionHeader {
     key_derivation_context: [u8; KEY_DERIVATION_CTX_LENGTH],
-    header_version: u32,
+    header_version: Vec<u8>,
     wrapped_content_type: EncryptedContent,
 }
 
 impl EncryptionHeader {
     fn new(
         key_derivation_context: [u8; KEY_DERIVATION_CTX_LENGTH],
-        header_version: u32,
+        header_version: Vec<u8>,
         wrapped_content_type: EncryptedContent,
     ) -> Self {
         Self { key_derivation_context, header_version, wrapped_content_type }
@@ -122,7 +123,7 @@ impl EncryptionHeader {
     }
 
     pub(crate) fn generate_with_version(
-        header_version: u32,
+        header_version: Vec<u8>,
         wrapped_content_type: EncryptedContent,
     ) -> Self {
         let key_derivation_context = get_new_key_derivation_context();
@@ -137,7 +138,7 @@ impl EncryptionHeader {
     ) -> Result<Vec<u8>, HwCryptoError> {
         let encryption_key = match encryption_key {
             EncryptionHeaderKey::KeyGenerationContext(key_context) => {
-                get_encryption_key(self.header_version, key_context)?
+                get_encryption_key(self.header_version.as_slice(), key_context)?
             }
             EncryptionHeaderKey::ProvidedHkdfKey(key) => {
                 if key.len() != SERVICE_KEK_LENGTH {
@@ -278,7 +279,11 @@ impl TryFrom<&ProtectedHeader> for EncryptionHeader {
                         Some(parse_cborium_bytes_to_fixed_array(&element.1, "KEK context")?);
                 }
                 KEY_DERIVATION_VERSION_COSE_LABEL => {
-                    header_version = Some(parse_cborium_u32(&element.1, "header version")?);
+                    let value_bytes = element.1.as_bytes().ok_or(hwcrypto_err!(
+                        SERIALIZATION_ERROR,
+                        "wrong type when trying to parse bytes for header version"
+                    ))?;
+                    header_version = Some(value_bytes);
                 }
                 WRAPPED_CONTENT_TYPE_COSE_LABEL => {
                     wrapped_content_type = Some(
@@ -297,10 +302,12 @@ impl TryFrom<&ProtectedHeader> for EncryptionHeader {
         }
         let key_derivation_context = key_derivation_context
             .ok_or(hwcrypto_err!(SERIALIZATION_ERROR, "couldn't parse key context"))?;
-        let header_version = header_version
+        let header_version_ref = header_version
             .ok_or(hwcrypto_err!(SERIALIZATION_ERROR, "couldn't parse header version"))?;
         let wrapped_content_type = wrapped_content_type
             .ok_or(hwcrypto_err!(SERIALIZATION_ERROR, "couldn't parse content type"))?;
+        let mut header_version = Vec::<u8>::new();
+        header_version.try_extend_from_slice(header_version_ref.as_slice())?;
         Ok(Self::new(key_derivation_context, header_version, wrapped_content_type))
     }
 }
@@ -311,10 +318,12 @@ impl TryFrom<&EncryptionHeader> for Header {
     fn try_from(value: &EncryptionHeader) -> Result<Header, Self::Error> {
         let mut key_derivation_context = Vec::<u8>::new();
         key_derivation_context.try_extend_from_slice(&value.key_derivation_context[..])?;
+        let mut header_version = Vec::<u8>::new();
+        header_version.try_extend_from_slice(value.header_version.as_slice())?;
         let cose_header = coset::HeaderBuilder::new()
             .algorithm(coset::iana::Algorithm::A256GCM)
             .value(KEY_DERIVATION_CTX_COSE_LABEL, Value::Bytes(key_derivation_context))
-            .value(KEY_DERIVATION_VERSION_COSE_LABEL, Value::Integer(value.header_version.into()))
+            .value(KEY_DERIVATION_VERSION_COSE_LABEL, Value::Bytes(header_version))
             .value(
                 WRAPPED_CONTENT_TYPE_COSE_LABEL,
                 Value::Integer(value.wrapped_content_type.into()),
@@ -326,20 +335,8 @@ impl TryFrom<&EncryptionHeader> for Header {
 
 /// Get the base versioned encryption key used by the service to derive other versioned context
 /// encryption keys
-fn get_encryption_key(header_version: u32, key_context: &[u8]) -> Result<Vec<u8>, HwCryptoError> {
-    let mut key = Vec::<u8>::new();
-    key.try_reserve(SERVICE_KEK_LENGTH)?;
-    key.resize(SERVICE_KEK_LENGTH, 0);
-    let hwkey_session = Hwkey::open()
-        .map_err(|e| hwcrypto_err!(GENERIC_ERROR, "could not connect to hwkey service {:?}", e))?;
-    hwkey_session
-        .derive_key_req()
-        .unique_key()
-        .rollback_version_source(RollbackVersionSource::CommittedVersion)
-        .os_rollback_version(OsRollbackVersion::Version(header_version))
-        .derive(key_context, &mut key[..])
-        .map_err(|e| hwcrypto_err!(GENERIC_ERROR, "could derive key {:?}", e))?;
-    Ok(key)
+fn get_encryption_key(header_version: &[u8], key_context: &[u8]) -> Result<Vec<u8>, HwCryptoError> {
+    DeviceKeysImpl.derive_caller_unique_key(key_context, header_version, SERVICE_KEK_LENGTH)
 }
 
 // Create an AES key compatible with the current crypto backend used
@@ -379,27 +376,8 @@ pub(crate) fn parse_cborium_bytes_to_fixed_array(
     Ok(value_bytes.as_slice().try_into().expect("Shouldn't fail, we checked size already"))
 }
 
-fn parse_cborium_u32(
-    value: &ciborium::value::Value,
-    value_name: &str,
-) -> Result<u32, HwCryptoError> {
-    let integer_value = value.as_integer().ok_or(hwcrypto_err!(
-        SERIALIZATION_ERROR,
-        "wrong type when trying to parse a u32 from {}",
-        value_name
-    ))?;
-    integer_value.try_into().map_err(|e| {
-        hwcrypto_err!(SERIALIZATION_ERROR, "Error converting {} to u32: {}", value_name, e)
-    })
-}
-
-pub(crate) fn get_service_current_version() -> Result<u32, HwCryptoError> {
-    let hwkey_session = Hwkey::open()?;
-
-    match hwkey_session.query_current_os_version(RollbackVersionSource::CommittedVersion) {
-        Ok(OsRollbackVersion::Version(n)) => Ok(n),
-        _ => Err(hwcrypto_err!(GENERIC_ERROR, "error communicating with HwKey service")),
-    }
+pub(crate) fn get_service_current_version() -> Result<Vec<u8>, HwCryptoError> {
+    DeviceKeysImpl.get_caller_current_security_version()
 }
 
 #[cfg(test)]

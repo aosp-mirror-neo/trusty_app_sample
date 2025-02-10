@@ -34,6 +34,12 @@ mod opaque_key;
 mod platform_functions;
 mod service_encryption_key;
 
+use hwcryptohalinterfaces::DeviceKeys;
+use hwcryptohalplatform::DeviceKeysImpl;
+use static_assertions::assert_impl_all;
+
+assert_impl_all!(DeviceKeysImpl: DeviceKeys);
+
 #[cfg(test)]
 mod tests {
     test::init!();
