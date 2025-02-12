@@ -247,7 +247,9 @@ impl KeyHeaderMetadata {
                 "didn't receive any allowed operations for add_protection_id",
             ));
         }
-        let protection_id = ProtectionIdSerializable::try_from(protection_id)?;
+        let protection_id = ProtectionIdSerializable::try_from(protection_id).map_err(|e| {
+            hwcrypto_err!(GENERIC_ERROR, "couldn't convert from protection id {:?}", e,)
+        })?;
         if !self.protection_id_settings.contains_key(&protection_id) {
             return Err(hwcrypto_err!(
                 BAD_PARAMETER,
