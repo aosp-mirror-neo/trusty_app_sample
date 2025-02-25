@@ -36,6 +36,7 @@ service_dispatcher! {
 
 pub(crate) const RUST_HWCRYPTO_OPS_PORT: &CStr = c"com.android.trusty.rust.hwcryptohal.ops.V1";
 pub(crate) const RUST_SERVICE_PORT: &CStr = c"com.android.trusty.rust.hwcryptohal.V1";
+pub(crate) const NUM_IPC_QUEUES: u32 = 4;
 
 fn create_device_key_service(uuid: Uuid) -> Option<SpIBinder> {
     Some(hwcrypto_device_key::HwCryptoKey::new_binder(uuid).as_binder())
@@ -62,6 +63,7 @@ pub fn main_loop() -> Result<(), HwCryptoError> {
                     e
                 )
             })?
+            .msg_queue_len(NUM_IPC_QUEUES)
             .allow_ta_connect()
             .allow_ns_connect();
 
@@ -78,6 +80,7 @@ pub fn main_loop() -> Result<(), HwCryptoError> {
                 e
             )
         })?
+        .msg_queue_len(NUM_IPC_QUEUES)
         .allow_ta_connect()
         .allow_ns_connect();
 
