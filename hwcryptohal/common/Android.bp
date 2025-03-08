@@ -16,6 +16,7 @@ rust_library {
     name: "libhwcryptohal_common",
     crate_name: "hwcryptohal_common",
     enabled: false,
+    vendor_available: true,
     srcs: [
         "android.rs",
     ],
@@ -26,6 +27,9 @@ rust_library {
     ],
     arch: {
         x86_64: {
+            enabled: true,
+        },
+        arm64: {
             enabled: true,
         },
     },
