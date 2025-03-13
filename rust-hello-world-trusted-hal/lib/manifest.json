@@ -1,0 +1,6 @@
+{
+    "app_name": "hello_world_trusted_lib",
+    "uuid": "946b5274-d3e4-43b0-8dd9-71bcbb1c548c",
+    "min_heap": 20480,
+    "min_stack": 20480
+}
