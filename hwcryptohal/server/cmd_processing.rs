@@ -746,6 +746,7 @@ impl CmdProcessorContext {
                         // file descriptors fails on the trusty binder sw stack. We are changing
                         // changing the operation type instead of deleting it so the client do not
                         // need to recalculate the operations vector indexes to retrieve other data
+                        // (b/403522783).
                         *current_step = CryptoOperation::DestroyContext(Some(Void {}));
                         op_result?
                     }
