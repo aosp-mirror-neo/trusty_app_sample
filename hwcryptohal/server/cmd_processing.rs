@@ -17,7 +17,7 @@
 //! Module providing an implementation of a cryptographic command processor.
 
 use android_hardware_security_see_hwcrypto::aidl::android::hardware::security::see::hwcrypto::types::{
-    MemoryBufferReference::MemoryBufferReference, OperationData::OperationData,
+    MemoryBufferReference::MemoryBufferReference, OperationData::OperationData, Void::Void,
 };
 use android_hardware_security_see_hwcrypto::aidl::android::hardware::security::see::hwcrypto::{
     CryptoOperation::CryptoOperation,
@@ -632,6 +632,9 @@ impl CmdProcessorContext {
                 if !crypto_operation.is_active() {
                     return Err(hwcrypto_err!(BAD_PARAMETER, "operation is not active"));
                 }
+                if !crypto_operation.is_valid() {
+                    return Err(hwcrypto_err!(BAD_PARAMETER, "operation is no longer valid."));
+                }
                 Ok(&mut **crypto_operation)
             })?;
         let req_output_size = crypto_operation.get_operation_req_size(input.as_ref(), is_finish)?;
@@ -738,7 +741,14 @@ impl CmdProcessorContext {
                     }
                     CryptoOperation::DestroyContext(_) => self.destroy_step(&mut curr_output)?,
                     CryptoOperation::SetMemoryBuffer(step_data) => {
-                        self.set_memory_buffer_step(&step_data, &mut curr_output)?
+                        let op_result = self.set_memory_buffer_step(&step_data, &mut curr_output);
+                        // Workaround, currently trying to return with a operation step that includes
+                        // file descriptors fails on the trusty binder sw stack. We are changing
+                        // changing the operation type instead of deleting it so the client do not
+                        // need to recalculate the operations vector indexes to retrieve other data
+                        // (b/403522783).
+                        *current_step = CryptoOperation::DestroyContext(Some(Void {}));
+                        op_result?
                     }
                     CryptoOperation::SetOperationParameters(step_data) => {
                         self.current_state = CmdProcessorState::RunningOperation;
@@ -1021,18 +1031,17 @@ mod tests {
 
         cmd_list.push(CryptoOperation::SetMemoryBuffer(mem_buffer_parameters));
         let process_result = cmd_processor.process_all_steps(&mut cmd_list);
+        cmd_list.remove(0);
         expect!(process_result.is_ok(), "Couldn't process SetMemoryBuffer command");
         let mem_reference = MemoryBufferReference { startOffset: 0, sizeBytes: 3 };
         cmd_list
             .push(CryptoOperation::DataOutput(OperationData::MemoryBufferReference(mem_reference)));
 
-        let mut cmd_processor = CmdProcessorContext::new();
         let process_result = cmd_processor.process_all_steps(&mut cmd_list);
         expect!(process_result.is_ok(), "Couldn't process valid memory reference");
 
         let mem_ref = MemoryBufferReference { startOffset: total_buffer_size as i32, sizeBytes: 1 };
-        cmd_list[1] = CryptoOperation::DataOutput(OperationData::MemoryBufferReference(mem_ref));
-        let mut cmd_processor = CmdProcessorContext::new();
+        cmd_list[0] = CryptoOperation::DataOutput(OperationData::MemoryBufferReference(mem_ref));
         let process_result = cmd_processor.process_all_steps(&mut cmd_list);
         expect!(
             process_result.is_err(),
@@ -1040,8 +1049,7 @@ mod tests {
         );
 
         let mem_ref = MemoryBufferReference { startOffset: total_buffer_size as i32, sizeBytes: 0 };
-        cmd_list[1] = CryptoOperation::DataOutput(OperationData::MemoryBufferReference(mem_ref));
-        let mut cmd_processor = CmdProcessorContext::new();
+        cmd_list[0] = CryptoOperation::DataOutput(OperationData::MemoryBufferReference(mem_ref));
         let process_result = cmd_processor.process_all_steps(&mut cmd_list);
         expect!(
             process_result.is_err(),
@@ -1049,15 +1057,13 @@ mod tests {
         );
 
         let mem_ref = MemoryBufferReference { startOffset: 3, sizeBytes: 0 };
-        cmd_list[1] = CryptoOperation::DataOutput(OperationData::MemoryBufferReference(mem_ref));
-        let mut cmd_processor = CmdProcessorContext::new();
+        cmd_list[0] = CryptoOperation::DataOutput(OperationData::MemoryBufferReference(mem_ref));
         let process_result = cmd_processor.process_all_steps(&mut cmd_list);
         expect!(process_result.is_err(), "Shouldn't be able to process 0 size references");
 
         let mem_ref =
             MemoryBufferReference { startOffset: total_buffer_size as i32 - 1, sizeBytes: 1 };
-        cmd_list[1] = CryptoOperation::DataOutput(OperationData::MemoryBufferReference(mem_ref));
-        let mut cmd_processor = CmdProcessorContext::new();
+        cmd_list[0] = CryptoOperation::DataOutput(OperationData::MemoryBufferReference(mem_ref));
         let process_result = cmd_processor.process_all_steps(&mut cmd_list);
         expect!(
             process_result.is_ok(),
@@ -1067,8 +1073,7 @@ mod tests {
 
         let mem_ref =
             MemoryBufferReference { startOffset: total_buffer_size as i32 - 1, sizeBytes: 2 };
-        cmd_list[1] = CryptoOperation::DataOutput(OperationData::MemoryBufferReference(mem_ref));
-        let mut cmd_processor = CmdProcessorContext::new();
+        cmd_list[0] = CryptoOperation::DataOutput(OperationData::MemoryBufferReference(mem_ref));
         let process_result = cmd_processor.process_all_steps(&mut cmd_list);
         expect!(
             process_result.is_err(),
@@ -1220,6 +1225,7 @@ mod tests {
         expect!(process_result.is_ok(), "Couldn't process command");
         let mut read_slice_val = vec![55; 9];
         let mem_buffer = cmd_processor.current_output_memory_buffer.as_ref().unwrap();
+        cmd_list.remove(0);
         read_slice(&mem_buffer, &mut read_slice_val[..], 0).unwrap();
         expect_eq!(
             &read_slice_val[..],
@@ -1228,7 +1234,6 @@ mod tests {
         );
 
         cmd_list.push(CryptoOperation::CopyData(OperationData::DataBuffer(vec![4, 5, 6])));
-        let mut cmd_processor = CmdProcessorContext::new();
         let process_result = cmd_processor.process_all_steps(&mut cmd_list);
         expect!(
             process_result.is_err(),
@@ -1270,23 +1275,23 @@ mod tests {
             output_reference,
         )));
         let process_result = cmd_processor.process_all_steps(&mut cmd_list);
+        cmd_list.remove(1);
+        cmd_list.remove(0);
         expect!(process_result.is_err(), "shouldn't be able to add an output outside of range");
         let output_reference =
             MemoryBufferReference { startOffset: 0, sizeBytes: alloc_size as i32 };
-        cmd_list[2] =
+        cmd_list[0] =
             CryptoOperation::DataOutput(OperationData::MemoryBufferReference(output_reference));
         let input_reference =
             MemoryBufferReference { startOffset: 0, sizeBytes: (alloc_size + 4) as i32 };
         cmd_list
             .push(CryptoOperation::CopyData(OperationData::MemoryBufferReference(input_reference)));
-        let mut cmd_processor = CmdProcessorContext::new();
         let process_result = cmd_processor.process_all_steps(&mut cmd_list);
         expect!(process_result.is_err(), "shouldn't be able to add an input ref outside of range");
         let input_reference =
             MemoryBufferReference { startOffset: 0, sizeBytes: alloc_size as i32 };
-        cmd_list[3] =
+        cmd_list[1] =
             CryptoOperation::CopyData(OperationData::MemoryBufferReference(input_reference));
-        let mut cmd_processor = CmdProcessorContext::new();
         let process_result = cmd_processor.process_all_steps(&mut cmd_list);
         expect!(process_result.is_ok(), "operation should have succeeded");
     }
@@ -1319,7 +1324,8 @@ mod tests {
         let mem_buffer = cmd_processor.current_output_memory_buffer.as_ref().unwrap();
         read_slice(&mem_buffer, &mut read_slice_val[..], 0).unwrap();
         expect_eq!(&read_slice_val[..], &[0, 0, 0, 0, 0, 0, 0, 0, 0], "initial values where not 0");
-        let mut cmd_processor = CmdProcessorContext::new();
+        cmd_list.remove(1);
+        cmd_list.remove(0);
         let output_reference =
             MemoryBufferReference { startOffset: 0, sizeBytes: alloc_size as i32 };
         cmd_list.push(CryptoOperation::DataOutput(OperationData::MemoryBufferReference(
@@ -1332,7 +1338,6 @@ mod tests {
         read_slice(&mem_buffer, &mut read_slice_val[..], 0).unwrap();
         expect_eq!(&read_slice_val[..], &[1, 2, 3, 0, 0, 0, 0, 0, 0], "initial values where not 0");
         cmd_list.push(CryptoOperation::CopyData(OperationData::DataBuffer(vec![4, 5, 6])));
-        let mut cmd_processor = CmdProcessorContext::new();
         let process_result = cmd_processor.process_all_steps(&mut cmd_list);
         expect!(process_result.is_ok(), "Couldn't process command");
         let mem_buffer = cmd_processor.current_output_memory_buffer.as_ref().unwrap();
@@ -1341,7 +1346,6 @@ mod tests {
         let input_reference = MemoryBufferReference { startOffset: 0, sizeBytes: 3 };
         cmd_list
             .push(CryptoOperation::CopyData(OperationData::MemoryBufferReference(input_reference)));
-        let mut cmd_processor = CmdProcessorContext::new();
         let process_result = cmd_processor.process_all_steps(&mut cmd_list);
         expect!(process_result.is_ok(), "Couldn't process command");
         cmd_list.clear();
@@ -1388,17 +1392,15 @@ mod tests {
         cmd_list
             .push(CryptoOperation::CopyData(OperationData::MemoryBufferReference(input_reference)));
         let input_reference = MemoryBufferReference { startOffset: 3, sizeBytes: 3 as i32 };
-        //cmd_list
-        //    .push(CryptoOperation::CopyData(OperationData::MemoryBufferReference(input_reference)));
         let process_result = cmd_processor.process_all_steps(&mut cmd_list);
         expect!(process_result.is_ok(), "Couldn't process command");
         let CryptoOperation::DataOutput(OperationData::DataBuffer(output)) = &cmd_list[0] else {
             unreachable!("should not happen beucase we created the cmd list on the test");
         };
         expect_eq!(output, &[2, 4, 8], "values were not copied correctly");
-        let mut cmd_processor = CmdProcessorContext::new();
         cmd_list[2] =
             CryptoOperation::CopyData(OperationData::MemoryBufferReference(input_reference));
+        cmd_list.remove(1);
         let process_result = cmd_processor.process_all_steps(&mut cmd_list);
         expect!(process_result.is_ok(), "Couldn't process second copy command");
         let CryptoOperation::DataOutput(OperationData::DataBuffer(output)) = &cmd_list[0] else {
