@@ -53,10 +53,10 @@ use kmr_wire::{keymint::EcCurve, AsCborValue as _};
 use std::sync::{Mutex, OnceLock};
 use tipc::Uuid;
 
-use crate::crypto_provider;
 use crate::helpers;
 use crate::hwcrypto_device_key::HwCryptoKey;
 use crate::service_encryption_key::{EncryptedContent, EncryptionHeader, EncryptionHeaderKey};
+use crate::{crypto_provider, platform_functions};
 
 /// Number of bytes of unique value used to check if a key was created on current HWCrypto boot.
 const UNIQUE_VALUE_SIZEOF: usize = 32;
@@ -64,6 +64,8 @@ const UNIQUE_VALUE_SIZEOF: usize = 32;
 const SEALING_KEY_DERIVATION_HMAC_256_CTX: &[u8] = b"SEALING_KEY_DERIVATION_HMAC_256_CTX";
 
 const HW_CRYPTO_WRAP_KEY_HMAC_256_CTX: &[u8] = b"HW_CRYPTO_WRAP_KEY_HMAC_256_CTX";
+
+const TOKEN_EXPORT_EXPIRATION_TIME_10S: u64 = 10;
 
 /// Struct to wrap boot unique counter. It is used to tag objects to the current boot.
 #[derive(Clone)]
@@ -217,9 +219,99 @@ fn check_protection_id_settings(
     }
 }
 
+#[derive(Copy, Clone, Debug)]
+pub(crate) struct ExpirationTime {
+    set_time_ms: u64,
+    valid_period_ms: u64,
+}
+
+impl ExpirationTime {
+    fn new(expiration_time_sec: u64) -> Result<Self, HwCryptoError> {
+        let set_time_ms = platform_functions::current_epoch_time_ms()?;
+        let valid_period_ms = expiration_time_sec
+            .checked_mul(1000)
+            .ok_or(hwcrypto_err!(BAD_PARAMETER, "validity period is too big",))?;
+        Ok(ExpirationTime { set_time_ms, valid_period_ms })
+    }
+
+    pub(crate) fn check_validity(&self) -> Result<bool, HwCryptoError> {
+        let current_time_ms = platform_functions::current_epoch_time_ms()?;
+        if current_time_ms < self.set_time_ms {
+            return Err(hwcrypto_err!(INVALID_KEY, "current time is before expiry set time",));
+        }
+        let valid_until_ms = self
+            .set_time_ms
+            .checked_add(self.valid_period_ms)
+            .ok_or(hwcrypto_err!(BAD_PARAMETER, "couldn't calculate validity period",))?;
+        Ok(current_time_ms < valid_until_ms)
+    }
+}
+
+impl AsCborValue for ExpirationTime {
+    fn to_cbor_value(self) -> Result<Value, CoseError> {
+        let mut cbor_map = Vec::<(Value, Value)>::new();
+        cbor_map.try_reserve(2).map_err(|_| CoseError::EncodeFailed)?;
+
+        let key = Value::Integer((ExpirationTimeCoseLabels::SetTime as i64).into());
+        let value = Value::Integer(self.set_time_ms.into());
+        cbor_map.push((key, value));
+
+        let key = Value::Integer((ExpirationTimeCoseLabels::ValidPeriod as i64).into());
+        let value = Value::Integer(self.valid_period_ms.into());
+        cbor_map.push((key, value));
+
+        Ok(Value::Map(cbor_map))
+    }
+
+    fn from_cbor_value(value: Value) -> Result<Self, CoseError> {
+        //unimplemented!("sdsdsdsd")
+        let opaque_key_map = value.into_map().map_err(|_| CoseError::ExtraneousData)?;
+        if opaque_key_map.len() != 2 {
+            return Err(CoseError::ExtraneousData);
+        }
+
+        let mut set_time_ms: Option<u64> = None;
+        let mut valid_period_ms: Option<u64> = None;
+        for (map_key, map_val) in opaque_key_map {
+            match map_key {
+                Value::Integer(key) => match key.try_into()? {
+                    ExpirationTimeCoseLabels::SetTime => {
+                        set_time_ms = Some(
+                            map_val
+                                .into_integer()
+                                .map_err(|_| {
+                                    CoseError::UnexpectedItem("not an integer", "integer")
+                                })?
+                                .try_into()
+                                .map_err(|_| CoseError::OutOfRangeIntegerValue)?,
+                        );
+                    }
+                    ExpirationTimeCoseLabels::ValidPeriod => {
+                        valid_period_ms = Some(
+                            map_val
+                                .into_integer()
+                                .map_err(|_| {
+                                    CoseError::UnexpectedItem("not an integer", "integer")
+                                })?
+                                .try_into()
+                                .map_err(|_| CoseError::OutOfRangeIntegerValue)?,
+                        );
+                    }
+                },
+                _ => return Err(CoseError::UnexpectedItem("not an integer", "integer map key")),
+            }
+        }
+
+        let set_time_ms = set_time_ms.ok_or(CoseError::EncodeFailed)?;
+        let valid_period_ms = valid_period_ms.ok_or(CoseError::EncodeFailed)?;
+
+        Ok(Self { set_time_ms, valid_period_ms })
+    }
+}
+
 #[derive(Debug)]
 struct KeyHeaderMetadata {
-    expiration_time: Option<u64>,
+    expiration_time: Option<ExpirationTime>,
     protection_id_settings: BTreeMap<ProtectionIdSerializable, ProtectionSetting>,
 }
 
@@ -229,11 +321,11 @@ impl KeyHeaderMetadata {
     }
 
     // While the current metadata definition wouldn't fail on this operation, we are doing this
-    // division to add an element to metadata that could fail while ying to clone
+    // division to add an element to metadata that could fail while trying to clone
     fn try_clone(&self) -> Result<Self, HwCryptoError> {
         let mut protection_id_settings = BTreeMap::new();
         protection_id_settings.extend(self.protection_id_settings.iter());
-        Ok(Self { expiration_time: None, protection_id_settings })
+        Ok(Self { expiration_time: self.expiration_time, protection_id_settings })
     }
 
     fn add_protection_id(
@@ -290,7 +382,9 @@ impl KeyHeaderMetadata {
 
         // Adding expiration time
         let expiration_time_value = if let Some(expiration_time) = self.expiration_time {
-            Value::Integer(expiration_time.into())
+            expiration_time.to_cbor_value().map_err(|_| {
+                hwcrypto_err!(BAD_PARAMETER, "couldn't get cbor representation of expiration time")
+            })?
         } else {
             Value::Null
         };
@@ -325,7 +419,7 @@ impl KeyHeaderMetadata {
         let mut protection_id_settings: Option<
             BTreeMap<ProtectionIdSerializable, ProtectionSetting>,
         > = None;
-        let mut expiration_time: Option<Option<u64>> = None;
+        let mut expiration_time: Option<Option<ExpirationTime>> = None;
 
         for (map_key, map_val) in metadata {
             let key = map_key
@@ -336,15 +430,12 @@ impl KeyHeaderMetadata {
                     expiration_time = if map_val.is_null() {
                         Some(None)
                     } else {
-                        let value = map_val
-                            .into_integer()
-                            .map_err(|_| {
-                                hwcrypto_err!(BAD_PARAMETER, "protection id key wasn't an integer")
-                            })?
-                            .try_into()
-                            .map_err(|_| {
-                                hwcrypto_err!(BAD_PARAMETER, "couldn't decode expiration time")
-                            })?;
+                        let value = ExpirationTime::from_cbor_value(map_val).map_err(|_| {
+                            hwcrypto_err!(
+                                BAD_PARAMETER,
+                                "couldn't transform expiration time to CBOR"
+                            )
+                        })?;
                         Some(Some(value))
                     }
                 }
@@ -385,6 +476,24 @@ impl KeyHeaderMetadata {
             "didn't find protection_ id settings on metadata"
         ))?;
         Ok(())
+    }
+
+    fn set_expiration_time(&mut self, expiration_time_sec: u64) -> Result<(), HwCryptoError> {
+        self.expiration_time = Some(ExpirationTime::new(expiration_time_sec)?);
+        Ok(())
+    }
+
+    fn expiration_time_set(&self) -> bool {
+        self.expiration_time.is_some()
+    }
+
+    fn expiration_time_valid(&self) -> Result<bool, HwCryptoError> {
+        if !self.expiration_time_set() {
+            Ok(true)
+        } else {
+            // expiration time is set, so unwrap will not panic
+            self.expiration_time.unwrap().check_validity()
+        }
     }
 }
 
@@ -433,6 +542,18 @@ impl KeyHeader {
     fn set_metadata_from_cbor(&mut self, metadata_as_cbor: Value) -> Result<(), HwCryptoError> {
         self.key_metadata.lock()?.set_metadata_from_cbor(metadata_as_cbor)
     }
+
+    fn set_expiration_time(&self, expiration_time_sec: u64) -> Result<(), HwCryptoError> {
+        self.key_metadata.lock()?.set_expiration_time(expiration_time_sec)
+    }
+
+    fn expiration_time_set(&self) -> Result<bool, HwCryptoError> {
+        Ok(self.key_metadata.lock()?.expiration_time_set())
+    }
+
+    fn expiration_time_valid(&self) -> Result<bool, HwCryptoError> {
+        self.key_metadata.lock()?.expiration_time_valid()
+    }
 }
 
 cose_enum_gen! {
@@ -455,6 +576,13 @@ cose_enum_gen! {
     enum KeyMetadataCoseLabels {
         KeyExpirationPeriod = -68000,
         ProtectionIdSettings = -68001,
+    }
+}
+
+cose_enum_gen! {
+    enum ExpirationTimeCoseLabels {
+        SetTime = -69000,
+        ValidPeriod = -69001,
     }
 }
 
@@ -686,6 +814,7 @@ impl OpaqueKey {
             return Err(hwcrypto_err!(GENERIC_ERROR, "only the owner of a key can export it"));
         }
         let key: OpaqueKey = self.try_clone()?;
+        key.set_expiration_time(TOKEN_EXPORT_EXPIRATION_TIME_10S)?;
         let token_creator = EncryptionHeader::generate(EncryptedContent::KeyMaterial)?;
 
         // This is a temporary workaround to create a DICE bound key because we will move to
@@ -736,6 +865,8 @@ impl OpaqueKey {
             EncryptedContent::WrappedKeyMaterial,
         )?;
 
+        sealing_dice_key.expiration_time_valid()?;
+
         let context = get_dice_sealing_key_derivation_context()?;
         // Preparing internal encryption DICE policy bound key
         let sealing_key = sealing_dice_key
@@ -754,6 +885,13 @@ impl OpaqueKey {
         )?;
 
         let opaque_key = Self::from_cbor_value(Value::from_slice(inner_key.as_slice())?)?;
+        if !opaque_key.expiration_time_set()? {
+            return Err(hwcrypto_err!(
+                INVALID_KEY,
+                "importer tokens should have an expiration time"
+            ));
+        }
+        opaque_key.expiration_time_valid()?;
         Ok(opaque_key)
     }
 
@@ -795,6 +933,8 @@ impl OpaqueKey {
                 &policy.keyLifetime
             ));
         }
+        // check that the key hasn't expired
+        self.expiration_time_valid()?;
         // Check that the derivation key can be used to derive keys (KeyPermissions/KeyPolicies)
         self.key_can_be_used_for_derivation()
     }
@@ -840,6 +980,7 @@ impl OpaqueKey {
         context: &[u8],
         derived_key_size: usize,
     ) -> Result<Vec<u8>, HwCryptoError> {
+        self.expiration_time_valid()?;
         let op_context = DerivationContext::new(HkdfOperationType::InternalSealingKeyDerivation)?;
         self.derive_clear_key_from_derivation_context(op_context, context, derived_key_size)
     }
@@ -849,6 +990,7 @@ impl OpaqueKey {
         context: &[u8],
         derived_key_size: usize,
     ) -> Result<Vec<u8>, HwCryptoError> {
+        self.expiration_time_valid()?;
         let op_context = DerivationContext::new(HkdfOperationType::ClearKeyDerivation)?;
         self.derive_clear_key_from_derivation_context(op_context, context, derived_key_size)
     }
@@ -859,6 +1001,7 @@ impl OpaqueKey {
         context: &[u8],
         connection_info: Uuid,
     ) -> binder::Result<binder::Strong<dyn IOpaqueKey>> {
+        self.expiration_time_valid()?;
         let aidl_policy = policy::cbor_policy_to_aidl(policy)?;
         self.check_key_derivation_parameters(&aidl_policy)?;
         let derived_key_size = get_key_size_in_bytes(&aidl_policy.keyType)?;
@@ -933,6 +1076,7 @@ impl OpaqueKey {
         &self,
         direction: SymmetricOperation,
     ) -> Result<(), HwCryptoError> {
+        self.expiration_time_valid()?;
         let dir = helpers::direction_to_key_usage(&direction)?;
         if !self.key_usage_supported(dir) {
             Err(hwcrypto_err!(BAD_PARAMETER, "provided key do not support {:?}", dir))
@@ -946,6 +1090,7 @@ impl OpaqueKey {
         &self,
         parameters: &SymmetricCryptoParameters,
     ) -> Result<(), HwCryptoError> {
+        self.expiration_time_valid()?;
         match parameters {
             SymmetricCryptoParameters::Aes(aes_parameters) => match aes_parameters {
                 AesCipherMode::Cbc(_) => match self.get_key_type() {
@@ -960,6 +1105,22 @@ impl OpaqueKey {
                     _ => Err(hwcrypto_err!(BAD_PARAMETER, "provided incompatible AES key for CTR")),
                 },
             },
+        }
+    }
+
+    fn set_expiration_time(&self, expiration_time_sec: u64) -> Result<(), HwCryptoError> {
+        self.key_header.set_expiration_time(expiration_time_sec)
+    }
+
+    pub(crate) fn expiration_time_set(&self) -> Result<bool, HwCryptoError> {
+        self.key_header.expiration_time_set()
+    }
+
+    pub(crate) fn expiration_time_valid(&self) -> Result<(), HwCryptoError> {
+        if !self.key_header.expiration_time_valid()? {
+            Err(hwcrypto_err!(INVALID_KEY, "key is no longer valid"))
+        } else {
+            Ok(())
         }
     }
 
@@ -1005,6 +1166,7 @@ impl IOpaqueKey for OpaqueKey {
     }
 
     fn getShareableToken(&self, sealing_dice_policy: &[u8]) -> binder::Result<OpaqueKeyToken> {
+        self.expiration_time_valid()?;
         Ok(OpaqueKeyToken { keyToken: self.create_token(sealing_dice_policy)? })
     }
 
@@ -1297,6 +1459,19 @@ pub(crate) fn generate_key_material(
 mod tests {
     use super::*;
     use test::{expect, expect_eq};
+    use android_hardware_security_see_hwcrypto::aidl::android::hardware::security::see::hwcrypto::{
+        types::{
+            AesCipherMode::AesCipherMode, CipherModeParameters::CipherModeParameters,
+            KeyLifetime::KeyLifetime, KeyType::KeyType, KeyUse::KeyUse,
+            OperationData::OperationData, SymmetricCryptoParameters::SymmetricCryptoParameters,
+            SymmetricOperation::SymmetricOperation,
+            SymmetricOperationParameters::SymmetricOperationParameters,
+        },
+        CryptoOperation::CryptoOperation,
+        KeyPolicy::KeyPolicy,
+        OperationParameters::OperationParameters,
+    };
+    use crate::cmd_processing::CmdProcessorContext;
 
     #[test]
     fn boot_unique_values_match() {
@@ -1321,5 +1496,130 @@ mod tests {
         let key_material = key_material.unwrap();
         let check_result = check_key_material_with_policy(&key_material, &policy);
         expect!(check_result.is_ok(), "wrong key type");
+    }
+
+    #[test]
+    fn expiration_time_creation() {
+        let expiration_time = ExpirationTime::new(10).expect("couldn't create expiration time");
+        expect!(
+            expiration_time.check_validity().expect("couldn't check validity"),
+            "expiration time should have been valid"
+        );
+    }
+
+    #[test]
+    fn expiration_time_serialization() {
+        let mut key_metadata = KeyHeaderMetadata::new();
+        expect!(
+            !key_metadata.expiration_time_set(),
+            "expiration time should not have been set by default"
+        );
+        expect!(
+            key_metadata.expiration_time_valid().expect("couldn't check validity"),
+            "expiration time should be valid if it has not been set"
+        );
+        let cbor_metadata =
+            key_metadata.get_metadata_as_cbor().expect("couldn't serialize metadata");
+        key_metadata.set_metadata_from_cbor(cbor_metadata).expect("couldn't set metadata back");
+        expect!(
+            !key_metadata.expiration_time_set(),
+            "expiration time should not have been set by default"
+        );
+        expect!(
+            key_metadata.expiration_time_valid().expect("couldn't check validity"),
+            "expiration time should be valid if it has not been set"
+        );
+
+        key_metadata.set_expiration_time(10).expect("couldn't set expiration time");
+        expect!(
+            key_metadata.expiration_time_set(),
+            "expiration time should have been set at this point"
+        );
+        expect!(
+            key_metadata.expiration_time_valid().expect("couldn't check validity"),
+            "expiration time should be valid"
+        );
+        let cbor_metadata =
+            key_metadata.get_metadata_as_cbor().expect("couldn't serialize metadata");
+        key_metadata.set_metadata_from_cbor(cbor_metadata).expect("couldn't set metadata back");
+        expect!(
+            key_metadata.expiration_time_set(),
+            "expiration time should have been set at this point"
+        );
+        expect!(
+            key_metadata.expiration_time_valid().expect("couldn't check validity"),
+            "expiration time should be valid"
+        );
+    }
+
+    #[test]
+    fn expiration_time_on_exported_token() {
+        let usage = KeyUse::ENCRYPT;
+        let key_type = KeyType::AES_256_GCM;
+        let policy = KeyPolicy {
+            usage,
+            keyLifetime: KeyLifetime::PORTABLE,
+            keyPermissions: Vec::new(),
+            keyType: key_type,
+            keyManagementKey: false,
+        };
+        let uuid = Uuid::new_from_string("f41a7796-975a-4279-8cc4-b73f8820430d").unwrap();
+        let key =
+            OpaqueKey::generate_opaque_key(&policy, uuid.clone()).expect("couldn't generate key");
+        let hw_device_key = HwCryptoKey::new_binder(uuid);
+        let sealing_dice_policy =
+            hw_device_key.getCurrentDicePolicy().expect("couldn't get sealing policy");
+        let token =
+            key.getShareableToken(sealing_dice_policy.as_slice()).expect("couldn't generate token");
+        let imported_key_binder = hw_device_key
+            .keyTokenImport(&token, sealing_dice_policy.as_slice())
+            .expect("couldn't import back token");
+        let imported_key: OpaqueKey =
+            (&imported_key_binder).try_into().expect("couldn't cast back key");
+        expect!(
+            imported_key.expiration_time_set().expect("couldn't check if expiration time was set"),
+            "expiration time should have been set"
+        );
+        expect!(imported_key.expiration_time_valid().is_ok(), "expiration time should be valid");
+    }
+
+    #[test]
+    fn aes_simple_test_expired_key() {
+        let usage = KeyUse::ENCRYPT_DECRYPT;
+        let key_type = KeyType::AES_256_CBC_PKCS7_PADDING;
+        let policy = KeyPolicy {
+            usage,
+            keyLifetime: KeyLifetime::PORTABLE,
+            keyPermissions: Vec::new(),
+            keyType: key_type,
+            keyManagementKey: false,
+        };
+        let uuid = Uuid::new_from_string("f41a7796-975a-4279-8cc4-b73f8820430d").unwrap();
+        let key =
+            OpaqueKey::generate_opaque_key(&policy, uuid.clone()).expect("couldn't generate key");
+        let key: OpaqueKey = (&key).try_into().expect("couldn't cast back key");
+        key.set_expiration_time(0).expect("couldn't set up expiration time");
+        let binder_key = BnOpaqueKey::new_binder(key, binder::BinderFeatures::default());
+
+        let nonce = [0u8; 16];
+        let parameters = SymmetricCryptoParameters::Aes(AesCipherMode::Cbc(CipherModeParameters {
+            nonce: nonce.into(),
+        }));
+        let direction = SymmetricOperation::ENCRYPT;
+        let sym_op_params =
+            SymmetricOperationParameters { key: Some(binder_key), direction, parameters };
+        let op_params = OperationParameters::SymmetricCrypto(sym_op_params);
+        let mut cmd_list = Vec::<CryptoOperation>::new();
+        let data_output = OperationData::DataBuffer(Vec::new());
+        cmd_list.push(CryptoOperation::DataOutput(data_output));
+        cmd_list.push(CryptoOperation::SetOperationParameters(op_params));
+        let input_data = OperationData::DataBuffer("string to be encrypted".as_bytes().to_vec());
+        cmd_list.push(CryptoOperation::DataInput(input_data));
+        let mut cmd_processor = CmdProcessorContext::new();
+        let process_result = cmd_processor.process_all_steps(&mut cmd_list);
+        expect!(
+            process_result.is_err(),
+            "shouldn't be able to run an operation with an expired key"
+        )
     }
 }
