@@ -23,7 +23,7 @@ use authmgr_handover_aidl::binder;
 use binder::{ParcelFileDescriptor, SpIBinder};
 use log::error;
 use rpcbinder::RpcServer;
-use std::os::fd::IntoRawFd;
+use std::os::fd::AsRawFd;
 use std::sync::{Arc, Weak};
 use tipc::raw::{HandleSetWrapper, ToConnect, WorkToDo};
 use tipc::{Handle, PortCfg, Uuid};
@@ -62,14 +62,8 @@ impl ITrustedServicesHandover for HandoverService {
         fd: &ParcelFileDescriptor,
         _client_seq_num: i32,
     ) -> binder::Result<()> {
-        let owned_fd = fd.as_ref().try_clone().map_err(|e| {
-            error!("Failed to clone the handle: {:?}", e);
-            binder::Status::new_exception(
-                binder::ExceptionCode::SERVICE_SPECIFIC,
-                Some(&CString::new("Failed to clone the handle.".to_string()).unwrap()),
-            )
-        })?;
-        let handle = Handle::from_raw(owned_fd.into_raw_fd()).map_err(|e| {
+        let raw_fd = fd.as_raw_fd();
+        let handle = Handle::from_raw(raw_fd).map_err(|e| {
             error!("Failed to create the handle from the raw fd: {:?}.", e);
             binder::Status::new_exception(
                 binder::ExceptionCode::SERVICE_SPECIFIC,
@@ -79,11 +73,21 @@ impl ITrustedServicesHandover for HandoverService {
                 ),
             )
         })?;
+        let dup_handle = handle.try_clone().map_err(|e| {
+            error!("Failed to clone the handle: {:?}", e);
+            binder::Status::new_exception(
+                binder::ExceptionCode::SERVICE_SPECIFIC,
+                Some(&CString::new("Failed to clone the handle.".to_string()).unwrap()),
+            )
+        })?;
+        // Prevent the destructor of the handle from calling because it will be closed by the Parcel
+        // File Descriptor which owns it.
+        core::mem::forget(handle);
         let hello_service_port_cfg = PortCfg::new_raw(HELLO_WORLD_TRUSTED_SERVICE_PORT.into())
             .allow_ta_connect()
             .allow_ns_connect();
         let to_connect = ToConnect::new(
-            handle,
+            dup_handle,
             Arc::clone(&self.trusted_service),
             hello_service_port_cfg,
             // TODO b/401776482. We need to pass in `client_seq_num` once the bug is fixed.
