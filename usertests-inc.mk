@@ -38,6 +38,7 @@ TRUSTY_USER_TESTS += \
 endif
 
 TRUSTY_RUST_USER_TESTS += \
+	trusty/user/app/authmgr/authmgr-be/lib \
 	trusty/user/app/sample/hwcryptohal/common \
 	trusty/user/app/sample/hwcryptohal/server \
 	trusty/user/app/sample/hwcryptokey-test \
