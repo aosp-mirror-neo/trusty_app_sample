@@ -91,6 +91,8 @@ pub(crate) trait ICryptographicOperation: Send {
 
     fn is_active(&self) -> bool;
 
+    fn is_valid(&self) -> bool;
+
     #[allow(dead_code)]
     fn update_aad(&mut self, _input: &DataToProcess) -> Result<(), HwCryptoError> {
         Err(hwcrypto_err!(
@@ -121,6 +123,8 @@ trait IBaseCryptoOperation: Send {
     fn get_req_size_update(&self, input: &DataToProcess) -> Result<usize, HwCryptoError>;
 
     fn is_active(&self) -> bool;
+
+    fn is_valid(&self) -> bool;
 
     fn update_aad(&mut self, _input: &DataToProcess) -> Result<(), HwCryptoError> {
         Err(hwcrypto_err!(
@@ -167,6 +171,10 @@ impl<T: IBaseCryptoOperation> ICryptographicOperation for T {
 
     fn is_active(&self) -> bool {
         self.is_active()
+    }
+
+    fn is_valid(&self) -> bool {
+        self.is_valid()
     }
 
     fn update_aad(&mut self, input: &DataToProcess) -> Result<(), HwCryptoError> {
@@ -221,6 +229,7 @@ impl TempBuffer {
 }
 
 pub(crate) struct HmacOperation {
+    opaque_key: OpaqueKey,
     accumulating_op: Option<Box<dyn crypto::AccumulatingOperation>>,
 }
 
@@ -235,12 +244,12 @@ impl HmacOperation {
         let digest = helpers::aidl_to_rust_digest(&opaque_key.get_key_type())?;
         let hmac = crypto_provider::HmacImpl;
         let accumulating_op = match opaque_key.key_material {
-            KeyMaterial::Hmac(key) => hmac.begin(key.clone(), digest).map_err(|e| {
+            KeyMaterial::Hmac(ref key) => hmac.begin(key.clone(), digest).map_err(|e| {
                 hwcrypto_err!(GENERIC_ERROR, "couldn't begin hmac operation: {:?}", e)
             }),
             _ => Err(hwcrypto_err!(BAD_PARAMETER, "Invalid key type for HMAC operation")),
         }?;
-        Ok(HmacOperation { accumulating_op: Some(accumulating_op) })
+        Ok(HmacOperation { opaque_key, accumulating_op: Some(accumulating_op) })
     }
 
     fn check_parameters(
@@ -250,6 +259,7 @@ impl HmacOperation {
         if !opaque_key.key_usage_supported(KeyUse::SIGN) {
             return Err(hwcrypto_err!(BAD_PARAMETER, "Provided key cannot be used for signing"));
         }
+        opaque_key.expiration_time_valid()?;
         match &opaque_key.key_material {
             KeyMaterial::Hmac(_) => Ok(()),
             _ => Err(hwcrypto_err!(BAD_PARAMETER, "Invalid key type for HMAC operation")),
@@ -299,6 +309,10 @@ impl IBaseCryptoOperation for HmacOperation {
 
     fn is_active(&self) -> bool {
         self.accumulating_op.is_some()
+    }
+
+    fn is_valid(&self) -> bool {
+        self.opaque_key.expiration_time_valid().is_ok()
     }
 
     fn set_operation_pattern(
@@ -356,6 +370,7 @@ impl AesOperation {
         dir: SymmetricOperation,
         parameters: &SymmetricCryptoParameters,
     ) -> Result<(), HwCryptoError> {
+        opaque_key.expiration_time_valid()?;
         opaque_key.symmetric_operation_is_compatible(dir)?;
         opaque_key.parameters_are_compatible_symmetric_cipher(parameters)
     }
@@ -560,6 +575,10 @@ impl IBaseCryptoOperation for AesOperation {
         self.emitting_op.is_some()
     }
 
+    fn is_valid(&self) -> bool {
+        self.opaque_key.expiration_time_valid().is_ok()
+    }
+
     fn set_operation_pattern(
         &mut self,
         pattern_parameters: &PatternParameters,
@@ -604,6 +623,10 @@ impl ICryptographicOperation for CopyOperation {
     }
 
     fn is_active(&self) -> bool {
+        true
+    }
+
+    fn is_valid(&self) -> bool {
         true
     }
 }
@@ -657,6 +680,10 @@ impl ICryptographicOperation for () {
     }
 
     fn is_active(&self) -> bool {
+        false
+    }
+
+    fn is_valid(&self) -> bool {
         false
     }
 }

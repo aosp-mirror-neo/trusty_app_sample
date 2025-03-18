@@ -632,6 +632,9 @@ impl CmdProcessorContext {
                 if !crypto_operation.is_active() {
                     return Err(hwcrypto_err!(BAD_PARAMETER, "operation is not active"));
                 }
+                if !crypto_operation.is_valid() {
+                    return Err(hwcrypto_err!(BAD_PARAMETER, "operation is no longer valid."));
+                }
                 Ok(&mut **crypto_operation)
             })?;
         let req_output_size = crypto_operation.get_operation_req_size(input.as_ref(), is_finish)?;
@@ -743,6 +746,7 @@ impl CmdProcessorContext {
                         // file descriptors fails on the trusty binder sw stack. We are changing
                         // changing the operation type instead of deleting it so the client do not
                         // need to recalculate the operations vector indexes to retrieve other data
+                        // (b/403522783).
                         *current_step = CryptoOperation::DestroyContext(Some(Void {}));
                         op_result?
                     }
