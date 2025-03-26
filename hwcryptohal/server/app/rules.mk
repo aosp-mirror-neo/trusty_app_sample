@@ -25,6 +25,11 @@ MODULE_SRCS += \
 MODULE_CRATE_NAME := hwcryptohalserver_app
 
 MODULE_LIBRARY_DEPS += \
+	frameworks/native/libs/binder/trusty/rust \
+	frameworks/native/libs/binder/trusty/rust/binder_rpc_server \
+	frameworks/native/libs/binder/trusty/rust/rpcbinder \
+	trusty/user/app/authmgr/authmgr-be/lib \
+	trusty/user/app/sample/hwcryptohal/common  \
 	trusty/user/app/sample/hwcryptohal/server \
 	trusty/user/base/lib/tipc/rust \
 	trusty/user/base/lib/trusty-sys \

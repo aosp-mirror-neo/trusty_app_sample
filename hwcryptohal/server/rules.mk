@@ -26,18 +26,13 @@ MODULE_CRATE_NAME := hwcryptohalserver
 
 MODULE_LIBRARY_DEPS += \
 	frameworks/native/libs/binder/trusty/rust \
-	frameworks/native/libs/binder/trusty/rust/binder_rpc_server \
-	frameworks/native/libs/binder/trusty/rust/rpcbinder \
-	trusty/user/app/authmgr/authmgr-be/lib \
 	trusty/user/app/sample/hwcryptohal/aidl/rust  \
 	trusty/user/app/sample/hwcryptohal/common  \
-	trusty/user/base/interface/authmgr-handover/aidl \
 	trusty/user/app/sample/hwcryptohal/server/interfaces \
 	trusty/user/app/sample/hwcryptohal/server/platform \
 	trusty/user/base/lib/keymint-rust/boringssl \
 	trusty/user/base/lib/keymint-rust/common \
 	trusty/user/base/lib/openssl-rust \
-	trusty/user/base/lib/tipc/rust \
 	$(call FIND_CRATE,log) \
 	$(call FIND_CRATE,static_assertions) \
 	trusty/user/base/lib/trusty-log \

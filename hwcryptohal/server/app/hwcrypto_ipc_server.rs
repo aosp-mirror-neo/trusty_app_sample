@@ -15,19 +15,15 @@
  */
 
 //! AIDL IPC Server code.
-use crate::hwcrypto_device_key;
 use authmgr_be_lib::{default_handover_port_config, HandoverService};
 use binder::SpIBinder;
-use core::ffi::CStr;
 use hwcryptohal_common::{err::HwCryptoError, hwcrypto_err};
+use hwcryptohalserver::HwCryptoKey;
 use rpcbinder::RpcServer;
 use std::sync::Arc;
 use tipc::raw::{EventLoop, HandleSetWrapper};
 use tipc::{self, ClientIdentifier, PortCfg};
 
-pub(crate) const RUST_SERVICE_PORT: &CStr = c"com.android.trusty.rust.hwcryptohal.V1";
-pub(crate) const HANDOVER_SERVICE_PORT: &str =
-    "android.hardware.security.see.hwcrypto.IHwCryptoKey/default.hnd";
 pub(crate) const NUM_IPC_QUEUES: u32 = 4;
 
 fn create_device_key_service(client_identifier: ClientIdentifier) -> Option<SpIBinder> {
@@ -43,22 +39,24 @@ fn create_device_key_service(client_identifier: ClientIdentifier) -> Option<SpIB
     let uuid_bytes = uuid_string.as_bytes();
     client_id.try_reserve(uuid_bytes.len()).ok()?;
     client_id.extend_from_slice(uuid_bytes);
-    Some(hwcrypto_device_key::HwCryptoKey::new_binder(client_id).as_binder())
+    Some(HwCryptoKey::new_binder(client_id).as_binder())
 }
 
 fn hwcryptohal_port_cfg() -> Result<PortCfg, HwCryptoError> {
-    Ok(PortCfg::new(RUST_SERVICE_PORT.to_str().expect("should not happen, valid utf-8"))
-        .map_err(|e| {
-            hwcrypto_err!(
-                GENERIC_ERROR,
-                "could not create port config for {:?}: {:?}",
-                RUST_SERVICE_PORT,
-                e
-            )
-        })?
-        .msg_queue_len(NUM_IPC_QUEUES)
-        .allow_ta_connect()
-        .allow_ns_connect())
+    Ok(PortCfg::new(
+        hwcryptohalserver::RUST_SERVICE_PORT.to_str().expect("should not happen, valid utf-8"),
+    )
+    .map_err(|e| {
+        hwcrypto_err!(
+            GENERIC_ERROR,
+            "could not create port config for {:?}: {:?}",
+            hwcryptohalserver::RUST_SERVICE_PORT,
+            e
+        )
+    })?
+    .msg_queue_len(NUM_IPC_QUEUES)
+    .allow_ta_connect()
+    .allow_ns_connect())
 }
 
 pub fn main_loop() -> Result<(), HwCryptoError> {
@@ -88,11 +86,11 @@ pub fn main_loop() -> Result<(), HwCryptoError> {
     let handover_rpc_service = Arc::new(RpcServer::new_per_session(handover_cb_per_session));
 
     let handover_service_port_cfg =
-        default_handover_port_config(HANDOVER_SERVICE_PORT).map_err(|e| {
+        default_handover_port_config(hwcryptohalserver::HANDOVER_SERVICE_PORT).map_err(|e| {
             hwcrypto_err!(
                 GENERIC_ERROR,
                 "could not create port config for {:?}: {:?}",
-                HANDOVER_SERVICE_PORT,
+                hwcryptohalserver::HANDOVER_SERVICE_PORT,
                 e
             )
         })?;
@@ -115,8 +113,9 @@ mod tests {
 
     #[test]
     fn connect_server() {
-        let session_device_key: Strong<dyn IHwCryptoKey> =
-            RpcSession::new().setup_trusty_client(RUST_SERVICE_PORT).expect("Failed to connect");
+        let session_device_key: Strong<dyn IHwCryptoKey> = RpcSession::new()
+            .setup_trusty_client(hwcryptohalserver::RUST_SERVICE_PORT)
+            .expect("Failed to connect");
         expect_eq!(session_device_key.as_binder().ping_binder(), Ok(()));
     }
 }

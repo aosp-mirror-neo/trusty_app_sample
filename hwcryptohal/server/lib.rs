@@ -20,7 +20,9 @@
 // C string literals were stabilized in Rust 1.77
 #![cfg_attr(not(version("1.77")), feature(c_str_literals))]
 
-pub mod hwcrypto_ipc_server;
+pub const HANDOVER_SERVICE_PORT: &str =
+    "IHandover/android.hardware.security.see.hwcrypto.IHwCryptoKey/default";
+pub const RUST_SERVICE_PORT: &std::ffi::CStr = c"com.android.trusty.rust.hwcryptohal.V1";
 
 mod cmd_processing;
 mod crypto_operation;
@@ -30,6 +32,8 @@ mod hwcrypto_device_key;
 mod hwcrypto_operations;
 mod opaque_key;
 mod service_encryption_key;
+
+pub use hwcrypto_device_key::HwCryptoKey;
 
 use hwcryptohalinterfaces::{ClientIdentification, DeviceKeys, DeviceTime, MemoryMappedObject};
 use hwcryptohalplatform::{

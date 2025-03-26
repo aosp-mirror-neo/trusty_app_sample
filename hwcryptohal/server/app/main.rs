@@ -14,7 +14,8 @@
  * limitations under the License.
  */
 
-use hwcryptohalserver::hwcrypto_ipc_server;
+mod hwcrypto_ipc_server;
+
 use log::info;
 
 fn main() {
