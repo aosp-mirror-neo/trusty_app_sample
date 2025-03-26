@@ -108,6 +108,7 @@ fn get_boot_unique_value() -> Result<BootUniqueValue, HwCryptoError> {
     Ok(boot_unique_value.clone())
 }
 
+#[allow(clippy::enum_variant_names)]
 #[derive(Copy, Clone)]
 pub(crate) enum HkdfOperationType {
     DiceBoundDerivation = 1,
@@ -602,11 +603,11 @@ impl AsCborValue for ProtectionSetting {
         cbor_map.try_reserve(2).map_err(|_| CoseError::EncodeFailed)?;
 
         let key = Value::Integer((ProtectionSettingsCoseLabels::WriteProtection as i64).into());
-        let value = Value::Bool(self.write_protection.into());
+        let value = Value::Bool(self.write_protection);
         cbor_map.push((key, value));
 
         let key = Value::Integer((ProtectionSettingsCoseLabels::ReadProtection as i64).into());
-        let value = Value::Bool(self.read_protection.into());
+        let value = Value::Bool(self.read_protection);
         cbor_map.push((key, value));
 
         Ok(Value::Map(cbor_map))
@@ -888,7 +889,7 @@ impl OpaqueKey {
         ))?;
 
         let (_, inner_key) = EncryptionHeader::decrypt_content_service_encryption_key(
-            &inner_content,
+            inner_content,
             EncryptionHeaderKey::ProvidedHkdfKey(sealing_key),
             EncryptedContent::KeyMaterial,
         )?;

@@ -404,7 +404,7 @@ impl AesOperation {
     }
 
     fn round_to_block_size(size: usize) -> usize {
-        ((size + crypto::aes::BLOCK_SIZE - 1) / crypto::aes::BLOCK_SIZE) * crypto::aes::BLOCK_SIZE
+        size.div_ceil(crypto::aes::BLOCK_SIZE) * crypto::aes::BLOCK_SIZE
     }
 
     fn cbcs_update<'a>(
@@ -505,7 +505,7 @@ impl IBaseCryptoOperation for AesOperation {
         if self.cbcs_pattern.is_some() {
             return self.cbcs_update(input, output);
         }
-        let (req_size, unaligned_size) = self.get_update_req_size_with_remainder(&input)?;
+        let (req_size, unaligned_size) = self.get_update_req_size_with_remainder(input)?;
         if output.len() != req_size {
             return Err(hwcrypto_err!(BAD_PARAMETER, "input size was not {}", req_size));
         }
@@ -617,9 +617,8 @@ impl ICryptographicOperation for CopyOperation {
         _is_finish: bool,
     ) -> Result<usize, HwCryptoError> {
         let num_bytes_copy = self.get_operation_req_size(input.as_deref(), false)?;
-        let mut input =
-            input.ok_or_else(|| hwcrypto_err!(BAD_PARAMETER, "input was not provided"))?;
-        output.read_from_slice(&mut input, None)?;
+        let input = input.ok_or_else(|| hwcrypto_err!(BAD_PARAMETER, "input was not provided"))?;
+        output.read_from_slice(input, None)?;
         Ok(num_bytes_copy)
     }
 

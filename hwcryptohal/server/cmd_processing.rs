@@ -342,7 +342,7 @@ struct MemoryBuffer(MemoryMappedObjectImpl);
 
 impl MemoryBuffer {
     fn new(memory_buffer_parameters: &MemoryBufferParameter) -> Result<Self, HwCryptoError> {
-        let mapped_buffer = MemoryMappedObjectImpl::mmap(&memory_buffer_parameters)?;
+        let mapped_buffer = MemoryMappedObjectImpl::mmap(memory_buffer_parameters)?;
         Ok(Self(mapped_buffer))
     }
 
@@ -448,23 +448,21 @@ impl CmdProcessorContext {
         };
         if current_memory_buffer.is_some() {
             Err(hwcrypto_err!(BAD_PARAMETER, "Memory buffer already set"))
+        } else if parameters.sizeBytes < 0 {
+            Err(hwcrypto_err!(BAD_PARAMETER, "Memory buffer size is negative"))
         } else {
-            if parameters.sizeBytes < 0 {
-                Err(hwcrypto_err!(BAD_PARAMETER, "Memory buffer size is negative"))
-            } else {
-                // With the current behaviour, next check should not be needed, because we can only
-                // set up the current_memory_buffer once and we can only set the current_output_ref
-                // after setting a current output memory buffer. Leaving the check here in case the
-                // behavior changes in the future
-                if buffer_is_output {
-                    if let Some(OutputData::MemoryReference(_, _)) = current_output_ref {
-                        // If the current output is a buffer reference, we need to invalidate it
-                        return Err(hwcrypto_err!(BAD_PARAMETER, "This should not be possible with current flow, we need to invalidate the current output reference now."));
-                    }
+            // With the current behaviour, next check should not be needed, because we can only
+            // set up the current_memory_buffer once and we can only set the current_output_ref
+            // after setting a current output memory buffer. Leaving the check here in case the
+            // behavior changes in the future
+            if buffer_is_output {
+                if let Some(OutputData::MemoryReference(_, _)) = current_output_ref {
+                    // If the current output is a buffer reference, we need to invalidate it
+                    return Err(hwcrypto_err!(BAD_PARAMETER, "This should not be possible with current flow, we need to invalidate the current output reference now."));
                 }
-                *current_memory_buffer = Some(MemoryBuffer::new(parameters)?);
-                Ok(())
             }
+            *current_memory_buffer = Some(MemoryBuffer::new(parameters)?);
+            Ok(())
         }
     }
 
@@ -478,7 +476,7 @@ impl CmdProcessorContext {
                 Ok(OutputData::MemoryReference(
                     *buffer_reference,
                     self.get_data_buffer_size(&MemoryBufferReferenceWithType::Output(
-                        (*buffer_reference).into(),
+                        *buffer_reference,
                     ))?,
                 ))
             }
@@ -522,14 +520,13 @@ impl CmdProcessorContext {
         // available method could potentially be use to modify the underlying memory buffer.
         if let Some(OutputData::MemoryReference(buff_ref, _)) = current_output_ref.as_ref() {
             self.check_memory_reference_in_range(&MemoryBufferReferenceWithType::Output(
-                (*buff_ref).into(),
+                *buff_ref,
             ))?;
         }
         // Creating a `DataToProcess` variable to abstract away where the input is located
         let mut input = match input_parameters {
             Some(OperationData::MemoryBufferReference(buffer_reference)) => Some({
-                let buffer_reference =
-                    MemoryBufferReferenceWithType::Input((*buffer_reference).into());
+                let buffer_reference = MemoryBufferReferenceWithType::Input(*buffer_reference);
                 self.check_memory_reference_in_range(&buffer_reference)?;
                 let (input_start, _input_stop, input_size) = get_limits(&buffer_reference)?;
                 self.current_input_memory_buffer
@@ -573,7 +570,7 @@ impl CmdProcessorContext {
                 // the result
                 let original_size = output_vec.len();
                 let mut output_buff =
-                    DataToProcess::allocate_buffer_end_vector(*output_vec, req_output_size)?;
+                    DataToProcess::allocate_buffer_end_vector(output_vec, req_output_size)?;
                 let added_bytes =
                     crypto_operation.operation(input.as_mut(), &mut output_buff, is_finish)?;
                 output_vec.truncate(original_size + added_bytes);
@@ -583,7 +580,7 @@ impl CmdProcessorContext {
                     return Err(hwcrypto_err!(ALLOCATION_ERROR, "run out of space output buffer"));
                 }
                 let (_output_start, output_stop, _output_size) =
-                    get_limits(&MemoryBufferReferenceWithType::Output((*output_buff_ref).into()))?;
+                    get_limits(&MemoryBufferReferenceWithType::Output(*output_buff_ref))?;
                 // We are automatically filling up the output buffer with the received input, so
                 // the first available position will be equal to the end of the buffer minus the
                 // remaining space:
@@ -601,7 +598,7 @@ impl CmdProcessorContext {
                     .get_subslice_as_data_to_process(output_start_offset, req_output_size)?;
                 let req_output_size =
                     crypto_operation.operation(input.as_mut(), &mut output_slice, is_finish)?;
-                *remaining_size = *remaining_size - req_output_size;
+                *remaining_size -= req_output_size;
             }
         }
         Ok(())
@@ -665,7 +662,7 @@ impl CmdProcessorContext {
                     }
                     CryptoOperation::DestroyContext(_) => self.destroy_step(&mut curr_output)?,
                     CryptoOperation::SetMemoryBuffer(step_data) => {
-                        let op_result = self.set_memory_buffer_step(&step_data, &mut curr_output);
+                        let op_result = self.set_memory_buffer_step(step_data, &mut curr_output);
                         // Workaround, currently trying to return with a operation step that includes
                         // file descriptors fails on the trusty binder sw stack. We are changing
                         // changing the operation type instead of deleting it so the client do not
@@ -676,7 +673,7 @@ impl CmdProcessorContext {
                     }
                     CryptoOperation::SetOperationParameters(step_data) => {
                         self.current_state = CmdProcessorState::RunningOperation;
-                        self.set_operation_parameters_step(&step_data, &mut curr_output)?;
+                        self.set_operation_parameters_step(step_data, &mut curr_output)?;
                     }
                     CryptoOperation::SetPattern(_) => {
                         return Err(hwcrypto_err!(

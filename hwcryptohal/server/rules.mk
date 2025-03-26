@@ -47,4 +47,6 @@ MODULE_LIBRARY_DEPS += \
 
 MODULE_RUST_TESTS := true
 
+MODULE_RUST_USE_CLIPPY := true
+
 include make/library.mk

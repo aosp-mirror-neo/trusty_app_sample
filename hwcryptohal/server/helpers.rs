@@ -83,23 +83,13 @@ pub(crate) fn aidl_to_rust_aes_cipher_params(
     let SymmetricCryptoParameters::Aes(aes_params) = params;
     match aes_params {
         AesCipherMode::Cbc(CipherModeParameters { nonce }) => {
-            // TODO: change clone() into something like a try_clone()
-            let nonce = nonce.clone();
-            let nonce_len = nonce.len();
+            let nonce = *nonce;
             match opaque_key.get_key_type() {
                 KeyType::AES_128_CBC_NO_PADDING | KeyType::AES_256_CBC_NO_PADDING => {
-                    Ok(crypto::aes::CipherMode::CbcNoPadding {
-                        nonce: nonce.try_into().map_err(|_| {
-                            hwcrypto_err!(BAD_PARAMETER, "bad nonce length: {}", nonce_len)
-                        })?,
-                    })
+                    Ok(crypto::aes::CipherMode::CbcNoPadding { nonce })
                 }
                 KeyType::AES_128_CBC_PKCS7_PADDING | KeyType::AES_256_CBC_PKCS7_PADDING => {
-                    Ok(crypto::aes::CipherMode::CbcPkcs7Padding {
-                        nonce: nonce.try_into().map_err(|_| {
-                            hwcrypto_err!(BAD_PARAMETER, "bad nonce length: {}", nonce_len)
-                        })?,
-                    })
+                    Ok(crypto::aes::CipherMode::CbcPkcs7Padding { nonce })
                 }
                 _ => Err(hwcrypto_err!(
                     BAD_PARAMETER,
@@ -109,14 +99,7 @@ pub(crate) fn aidl_to_rust_aes_cipher_params(
             }
         }
         AesCipherMode::Ctr(CipherModeParameters { nonce }) => {
-            let nonce_len = nonce.len();
-            // TODO: change clone() into something like a try_clone()
-            Ok(crypto::aes::CipherMode::Ctr {
-                nonce: nonce
-                    .clone()
-                    .try_into()
-                    .map_err(|_| hwcrypto_err!(BAD_PARAMETER, "bad nonce length: {}", nonce_len))?,
-            })
+            Ok(crypto::aes::CipherMode::Ctr { nonce: *nonce })
         }
     }
 }
