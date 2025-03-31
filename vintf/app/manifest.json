@@ -1,0 +1,6 @@
+{
+    "app_name": "vintf_trusted_app",
+    "uuid": "d2d10228-107c-4f7b-9c52-86dce8007049",
+    "min_heap": 118784,
+    "min_stack": 65536
+}
