@@ -29,6 +29,9 @@ rust_library {
         x86_64: {
             enabled: true,
         },
+        arm: {
+            enabled: true,
+        },
         arm64: {
             enabled: true,
         },
