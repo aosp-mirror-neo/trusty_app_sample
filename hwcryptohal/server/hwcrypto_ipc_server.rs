@@ -16,23 +16,25 @@
 
 //! AIDL IPC Server code.
 use crate::hwcrypto_device_key;
+use authmgr_be_lib::{default_handover_port_config, HandoverService};
 use binder::SpIBinder;
 use core::ffi::CStr;
 use hwcryptohal_common::{err::HwCryptoError, hwcrypto_err};
 use rpcbinder::RpcServer;
-use tipc::{self, Manager, PortCfg, Uuid};
+use std::sync::Arc;
+use tipc::raw::{EventLoop, HandleSetWrapper};
+use tipc::{self, PortCfg, Uuid};
 
 pub(crate) const RUST_SERVICE_PORT: &CStr = c"com.android.trusty.rust.hwcryptohal.V1";
+pub(crate) const HANDOVER_SERVICE_PORT: &CStr = c"ahss.hwcrypto.IHwCryptoKey/default.hnd";
 pub(crate) const NUM_IPC_QUEUES: u32 = 4;
 
 fn create_device_key_service(uuid: Uuid) -> Option<SpIBinder> {
     Some(hwcrypto_device_key::HwCryptoKey::new_binder(uuid).as_binder())
 }
 
-pub fn main_loop() -> Result<(), HwCryptoError> {
-    let hwdk_rpc_server = RpcServer::new_per_session(create_device_key_service);
-
-    let cfg = PortCfg::new(RUST_SERVICE_PORT.to_str().expect("should not happen, valid utf-8"))
+fn hwcryptohal_port_cfg() -> Result<PortCfg, HwCryptoError> {
+    Ok(PortCfg::new(RUST_SERVICE_PORT.to_str().expect("should not happen, valid utf-8"))
         .map_err(|e| {
             hwcrypto_err!(
                 GENERIC_ERROR,
@@ -43,14 +45,51 @@ pub fn main_loop() -> Result<(), HwCryptoError> {
         })?
         .msg_queue_len(NUM_IPC_QUEUES)
         .allow_ta_connect()
-        .allow_ns_connect();
+        .allow_ns_connect())
+}
 
-    let manager = Manager::<_, _, 1, 4>::new_unbuffered(hwdk_rpc_server, cfg)
-        .map_err(|e| hwcrypto_err!(GENERIC_ERROR, "could not create service manager: {:?}", e))?;
+pub fn main_loop() -> Result<(), HwCryptoError> {
+    let hwdk_rpc_server = Arc::new(RpcServer::new_per_session(create_device_key_service));
+    let hwdk_cfg = hwcryptohal_port_cfg()?;
 
-    manager
-        .run_event_loop()
-        .map_err(|e| hwcrypto_err!(GENERIC_ERROR, "service manager received error: {:?}", e))
+    let handle_set_wrapper = Arc::new(HandleSetWrapper::new()?);
+    // keeping a reference to `_port_wrapper_hw_crypto` is necessary for the service not to be
+    // removed from the set
+    let _port_wrapper_hw_crypto =
+        handle_set_wrapper.add_port(&hwdk_cfg, hwdk_rpc_server.clone())?;
+
+    let handle_set_wrapper_for_cb = Arc::clone(&handle_set_wrapper);
+
+    let handover_cb_per_session = move |uuid| {
+        Some(
+            HandoverService::new_handover_session(
+                uuid,
+                Arc::downgrade(&handle_set_wrapper_for_cb),
+                Arc::clone(&hwdk_rpc_server),
+                hwcryptohal_port_cfg().ok()?,
+            )
+            .as_binder(),
+        )
+    };
+
+    let handover_rpc_service = Arc::new(RpcServer::new_per_session(handover_cb_per_session));
+
+    let handover_service_port_cfg =
+        default_handover_port_config(HANDOVER_SERVICE_PORT).map_err(|e| {
+            hwcrypto_err!(
+                GENERIC_ERROR,
+                "could not create port config for {:?}: {:?}",
+                HANDOVER_SERVICE_PORT,
+                e
+            )
+        })?;
+    // keeping a reference to `_port_wrapper_handover` is necessary for the service not to be
+    // removed from the set
+    let _port_wrapper_handover =
+        handle_set_wrapper.add_port(&handover_service_port_cfg, handover_rpc_service)?;
+
+    let event_loop = EventLoop::new(handle_set_wrapper.clone());
+    Ok(event_loop.run()?)
 }
 
 #[cfg(test)]
