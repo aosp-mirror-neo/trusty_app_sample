@@ -370,7 +370,7 @@ impl AsCborValue for SerializableKeyPolicy {
 /// Mask used for valid AES key uses
 pub static AES_SYMMETRIC_KEY_USES_MASK: i32 = KeyUse::ENCRYPT_DECRYPT.0 | KeyUse::WRAP.0;
 /// Mask used for valid HMAC key uses
-pub static HMAC_KEY_USES_MASK: i32 = KeyUse::DERIVE.0;
+pub static HMAC_KEY_USES_MASK: i32 = KeyUse::DERIVE.0 | KeyUse::SIGN.0;
 
 /// checks if the values contained on `key_policy` are valid
 pub fn check_key_policy_values(key_policy: &KeyPolicy) -> Result<(), binder::Status> {
