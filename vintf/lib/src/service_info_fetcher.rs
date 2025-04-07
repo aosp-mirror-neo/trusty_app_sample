@@ -15,6 +15,7 @@
 //! Implementation of IServiceInfoFetcher.aidl
 
 use log::trace;
+use service_manager::get_supported_vintf_services;
 use vintf_service_info_aidl::aidl::android::vintf::{
     IServiceInfoFetcher::{BnServiceInfoFetcher, IServiceInfoFetcher},
     ServiceInfo::ServiceInfo,
@@ -35,11 +36,8 @@ impl ServiceInfoFetcher {
 impl IServiceInfoFetcher for ServiceInfoFetcher {
     fn listAllServices(&self) -> binder::Result<Vec<String>> {
         trace!("In IServiceInfoFetcher list service...");
-        let services = vec![
-            "android.hardware.security.see.authmgr.IAuthMgrAuthorization/default".to_string(),
-            "android.hardware.security.see.storage.ISecureStorage/default".to_string(),
-        ];
-        Ok(services)
+        let services = get_supported_vintf_services();
+        Ok(services.into_iter().map(|s| s.name().to_string()).collect())
     }
 
     fn getServiceInfo(&self, service_name: &str) -> binder::Result<ServiceInfo> {
