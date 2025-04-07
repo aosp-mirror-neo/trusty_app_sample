@@ -42,10 +42,37 @@ impl IServiceInfoFetcher for ServiceInfoFetcher {
 
     fn getServiceInfo(&self, service_name: &str) -> binder::Result<ServiceInfo> {
         trace!("In IServiceInfoFetcher get service info... {} ", service_name);
-        let service: Vec<&str> = service_name.split('/').collect();
+        let service = get_supported_vintf_services()
+            .into_iter()
+            .find(|s| s.name() == service_name)
+            .ok_or_else(|| {
+                binder::Status::new_service_specific_error_str(
+                    -1,
+                    Some("failed to get vintf service"),
+                )
+            })?;
+        let mut service_binder = service.get_binder()?;
+        let interface = service_binder.get_class().ok_or_else(|| {
+            binder::Status::new_service_specific_error_str(-1, Some("failed to get interface"))
+        })?;
+        let descriptor = interface.get_descriptor();
+        let name: Vec<&str> = service_name.split('/').collect();
+        if name.len() != 2 {
+            return Err(binder::Status::new_service_specific_error_str(
+                -1,
+                Some("invalid service name"),
+            ));
+        }
+        if name[0] != descriptor {
+            return Err(binder::Status::new_service_specific_error_str(
+                -1,
+                Some("service name does not match descriptor"),
+            ));
+        }
+        // TODO(b/150155678): Get hash and version from binder
         let service_info = ServiceInfo {
-            r#type: service[0].to_string(),
-            instance: "default".to_string(),
+            r#type: descriptor,
+            instance: name[1].to_string(),
             version: 1,
             requireVintfDeclaration: true,
             hash: "".to_string(),
