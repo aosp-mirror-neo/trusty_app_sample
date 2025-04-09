@@ -25,11 +25,13 @@ MODULE_SRCS += \
 MODULE_CRATE_NAME := hwcryptohalplatform
 
 MODULE_LIBRARY_DEPS += \
+	trusty/user/app/sample/hwcryptohal/aidl/rust  \
 	trusty/user/app/sample/hwcryptohal/common  \
 	trusty/user/app/sample/hwcryptohal/server/interfaces \
 	trusty/user/base/lib/hwkey/rust \
 	trusty/user/base/lib/keymint-rust/common \
 	trusty/user/base/lib/openssl-rust \
+	trusty/user/base/lib/tipc/rust \
 	$(call FIND_CRATE,log) \
 	trusty/user/base/lib/trusty-log \
 	trusty/user/base/lib/trusty-std \

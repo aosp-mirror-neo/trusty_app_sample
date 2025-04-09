@@ -16,7 +16,8 @@
 
 //! library implementing platform specific functions.
 
+mod client_identification;
 mod device_keys;
 
-pub use device_keys::bytes_to_version;
+pub use client_identification::TrustyClientIdentification as ClientIdentificationImpl;
 pub use device_keys::TrustyDeviceKeys as DeviceKeysImpl;

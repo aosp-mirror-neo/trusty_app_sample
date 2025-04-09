@@ -54,7 +54,7 @@ pub(crate) enum EncryptionHeaderKey<'a> {
 
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub(crate) enum EncryptedContent {
-    DicePolicy = 1,
+    ClientPolicy = 1,
     WrappedKeyMaterial = 2,
     KeyMaterial = 3,
 }
@@ -64,7 +64,7 @@ impl TryFrom<u64> for EncryptedContent {
 
     fn try_from(value: u64) -> Result<Self, Self::Error> {
         match value {
-            x if x == EncryptedContent::DicePolicy as u64 => Ok(EncryptedContent::DicePolicy),
+            x if x == EncryptedContent::ClientPolicy as u64 => Ok(EncryptedContent::ClientPolicy),
             x if x == EncryptedContent::WrappedKeyMaterial as u64 => {
                 Ok(EncryptedContent::WrappedKeyMaterial)
             }
@@ -387,7 +387,7 @@ mod tests {
 
     #[test]
     fn header_encryption_decryption() {
-        let header = EncryptionHeader::generate(EncryptedContent::DicePolicy);
+        let header = EncryptionHeader::generate(EncryptedContent::ClientPolicy);
         expect!(header.is_ok(), "couldn't generate header");
         let header = header.unwrap();
         let encrypted_content = header.encrypt_content_service_encryption_key(
@@ -399,7 +399,7 @@ mod tests {
         let decrypted_data = EncryptionHeader::decrypt_content_service_encryption_key(
             &encrypted_content[..],
             EncryptionHeaderKey::KeyGenerationContext(b"fake_context"),
-            EncryptedContent::DicePolicy,
+            EncryptedContent::ClientPolicy,
         );
         expect!(decrypted_data.is_ok(), "couldn't generate header");
         let (decrypted_header, decrypted_content) = decrypted_data.unwrap();

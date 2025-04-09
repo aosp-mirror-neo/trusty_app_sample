@@ -66,6 +66,6 @@ impl DeviceKeys for TrustyDeviceKeys {
     }
 }
 
-pub fn bytes_to_version(version: &[u8]) -> Result<u32, HwCryptoError> {
+pub(crate) fn bytes_to_version(version: &[u8]) -> Result<u32, HwCryptoError> {
     Ok(u32::from_le_bytes(version.try_into()?))
 }
