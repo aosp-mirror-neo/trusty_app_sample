@@ -25,6 +25,7 @@ MODULE_LIBRARY_DEPS += \
 	$(call FIND_CRATE,log) \
 	frameworks/native/libs/binder/trusty/rust/rpcbinder \
 	trusty/user/app/sample/vintf/aidl/rust  \
+	trusty/user/base/lib/service_manager/client \
 	trusty/user/base/lib/tipc/rust \
 
 include make/library.mk
