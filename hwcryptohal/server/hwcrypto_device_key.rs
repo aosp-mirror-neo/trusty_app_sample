@@ -660,6 +660,95 @@ mod tests {
     }
 
     #[test]
+    fn hwcrypto_token_export_import_hmac_use() {
+        // This test is not representative of the complete flow because here the exporter and importer
+        // are the same client, which is not something we would usually do
+        let hw_crypto_key: Strong<dyn IHwCryptoKey> = assert_ok!(
+            RpcSession::new().setup_trusty_client(RUST_SERVICE_PORT),
+            "Failed to connect"
+        );
+        let clear_key = ExplicitKeyMaterial::Hmac(HmacKey::Sha256([0; 32]));
+        let policy = KeyPolicy {
+            usage: KeyUse::SIGN,
+            keyLifetime: KeyLifetime::PORTABLE,
+            keyPermissions: Vec::new(),
+            keyManagementKey: false,
+            keyType: KeyType::HMAC_SHA256,
+        };
+        let key = assert_ok!(
+            hw_crypto_key.importClearKey(&clear_key, &policy),
+            "couldn't import clear key"
+        );
+        let dice_policy =
+            assert_ok!(hw_crypto_key.getCurrentDicePolicy(), "Couldn't get dice policy back");
+        let token = assert_ok!(
+            key.getShareableToken(dice_policy.as_slice()),
+            "Couldn't get shareable token"
+        );
+        let imported_key = assert_ok!(
+            hw_crypto_key.keyTokenImport(&token, dice_policy.as_slice()),
+            "Couldn't import shareable token"
+        );
+
+        let policy = imported_key.getKeyPolicy();
+        assert!(policy.is_ok(), "Couldn't get token key policy");
+
+        let hw_crypto_operations = assert_ok!(
+            hw_crypto_key.getHwCryptoOperations(),
+            "Couldn't get back a hwcryptokey operations binder object"
+        );
+
+        // Using operations to verify that the keys match
+        let hmac_parameters = HmacOperationParameters { key: Some(key) };
+        let op_parameters = OperationParameters::Hmac(hmac_parameters);
+        let mut cmd_list = Vec::<CryptoOperation>::new();
+        let data_output = OperationData::DataBuffer(Vec::new());
+        cmd_list.push(CryptoOperation::DataOutput(data_output));
+        cmd_list.push(CryptoOperation::SetOperationParameters(op_parameters));
+        let input_data = OperationData::DataBuffer("text to be mac'ed".as_bytes().to_vec());
+        cmd_list.push(CryptoOperation::DataInput(input_data));
+        cmd_list.push(CryptoOperation::Finish(None));
+        let crypto_op_set = CryptoOperationSet { context: None, operations: cmd_list };
+        let mut crypto_sets = Vec::new();
+        crypto_sets.push(crypto_op_set);
+        assert_ok!(
+            hw_crypto_operations.processCommandList(&mut crypto_sets),
+            "couldn't process commands"
+        );
+        // Extracting the vector from the command list because of ownership
+        let CryptoOperation::DataOutput(OperationData::DataBuffer(mac)) =
+            crypto_sets.remove(0).operations.remove(0)
+        else {
+            panic!("not reachable, we created this object above on the test");
+        };
+
+        // creating a key with the imported key to compare
+        let hmac_parameters = HmacOperationParameters { key: Some(imported_key) };
+        let op_parameters = OperationParameters::Hmac(hmac_parameters);
+        let mut cmd_list = Vec::<CryptoOperation>::new();
+        let data_output = OperationData::DataBuffer(Vec::new());
+        cmd_list.push(CryptoOperation::DataOutput(data_output));
+        cmd_list.push(CryptoOperation::SetOperationParameters(op_parameters));
+        let input_data = OperationData::DataBuffer("text to be mac'ed".as_bytes().to_vec());
+        cmd_list.push(CryptoOperation::DataInput(input_data));
+        cmd_list.push(CryptoOperation::Finish(None));
+        let crypto_op_set = CryptoOperationSet { context: None, operations: cmd_list };
+        let mut crypto_sets = Vec::new();
+        crypto_sets.push(crypto_op_set);
+        assert_ok!(
+            hw_crypto_operations.processCommandList(&mut crypto_sets),
+            "couldn't process commands"
+        );
+        // Extracting the vector from the command list because of ownership
+        let CryptoOperation::DataOutput(OperationData::DataBuffer(mac2)) =
+            crypto_sets.remove(0).operations.remove(0)
+        else {
+            panic!("not reachable, we created this object above on the test");
+        };
+        assert_eq!(mac, mac2, "got a different mac");
+    }
+
+    #[test]
     fn create_key_tokens() {
         let hw_key: Strong<dyn IHwCryptoKey> =
             RpcSession::new().setup_trusty_client(RUST_SERVICE_PORT).expect("Failed to connect");
