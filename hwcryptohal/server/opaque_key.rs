@@ -36,7 +36,7 @@ use binder::binder_impl::Binder;
 use ciborium::Value;
 use core::fmt;
 use coset::{AsCborValue, CborSerializable, CoseError};
-use hwcryptohalplatform::{AesImpl, HmacImpl};
+use hwcryptohalplatform::{AesImpl, HmacImpl, RngImpl};
 use hwcryptohal_common::{
     aidl_enum_wrapper, cose_enum_gen,
     err::HwCryptoError,
@@ -55,8 +55,8 @@ use std::sync::{Mutex, OnceLock};
 
 use crate::helpers;
 use crate::hwcrypto_device_key::HwCryptoKey;
+use crate::platform_functions;
 use crate::service_encryption_key::{EncryptedContent, EncryptionHeader, EncryptionHeaderKey};
-use crate::{crypto_provider, platform_functions};
 
 /// Number of bytes of unique value used to check if a key was created on current HWCrypto boot.
 const UNIQUE_VALUE_SIZEOF: usize = 32;
@@ -101,9 +101,8 @@ fn get_boot_unique_value() -> Result<BootUniqueValue, HwCryptoError> {
     // current implementation with one that can fail when trying to retrieve a random number.
     // If the RNG changes to a fallible one we could use `get_or_try_init`.
     let boot_unique_value = BOOT_UNIQUE_VALUE.get_or_init(|| {
-        let mut rng = crypto_provider::RngImpl::default();
         let mut new_boot_unique_value = BootUniqueValue([0u8; UNIQUE_VALUE_SIZEOF]);
-        rng.fill_bytes(&mut new_boot_unique_value.0[..]);
+        RngImpl.fill_bytes(&mut new_boot_unique_value.0[..]);
         new_boot_unique_value
     });
     Ok(boot_unique_value.clone())
@@ -1411,7 +1410,6 @@ pub(crate) fn generate_key_material(
     key_type: &KeyType,
     key_random_bytes: Option<Vec<u8>>,
 ) -> Result<KeyMaterial, HwCryptoError> {
-    let mut rng = crypto_provider::RngImpl::default();
     match *key_type {
         KeyType::AES_128_CBC_NO_PADDING
         | KeyType::AES_128_CBC_PKCS7_PADDING
@@ -1446,7 +1444,7 @@ pub(crate) fn generate_key_material(
                     )),
                 }
             } else {
-                Ok(AesImpl.generate_key(&mut rng, variant, &[])?)
+                Ok(AesImpl.generate_key(&mut RngImpl, variant, &[])?)
             }
         }
         KeyType::HMAC_SHA256 | KeyType::HMAC_SHA512 => {
@@ -1464,7 +1462,7 @@ pub(crate) fn generate_key_material(
                 }
             } else {
                 Ok(HmacImpl.generate_key(
-                    &mut rng,
+                    &mut RngImpl,
                     kmr_wire::KeySizeInBits((key_size_bytes * 8).try_into().map_err(|_| {
                         hwcrypto_err!(
                             GENERIC_ERROR,
