@@ -36,7 +36,8 @@ use binder::binder_impl::Binder;
 use ciborium::Value;
 use core::fmt;
 use coset::{AsCborValue, CborSerializable, CoseError};
-use hwcryptohalplatform::{AesImpl, HmacImpl, RngImpl};
+use hwcryptohalinterfaces::DeviceTime;
+use hwcryptohalplatform::{AesImpl, DeviceTimeImpl, HmacImpl, RngImpl};
 use hwcryptohal_common::{
     aidl_enum_wrapper, cose_enum_gen,
     err::HwCryptoError,
@@ -55,7 +56,6 @@ use std::sync::{Mutex, OnceLock};
 
 use crate::helpers;
 use crate::hwcrypto_device_key::HwCryptoKey;
-use crate::platform_functions;
 use crate::service_encryption_key::{EncryptedContent, EncryptionHeader, EncryptionHeaderKey};
 
 /// Number of bytes of unique value used to check if a key was created on current HWCrypto boot.
@@ -226,7 +226,7 @@ pub(crate) struct ExpirationTime {
 
 impl ExpirationTime {
     fn new(expiration_time_sec: u64) -> Result<Self, HwCryptoError> {
-        let set_time_ms = platform_functions::current_epoch_time_ms()?;
+        let set_time_ms = DeviceTimeImpl.current_epoch_time_ms()?;
         let valid_period_ms = expiration_time_sec
             .checked_mul(1000)
             .ok_or(hwcrypto_err!(BAD_PARAMETER, "validity period is too big",))?;
@@ -234,7 +234,7 @@ impl ExpirationTime {
     }
 
     pub(crate) fn check_validity(&self) -> Result<bool, HwCryptoError> {
-        let current_time_ms = platform_functions::current_epoch_time_ms()?;
+        let current_time_ms = DeviceTimeImpl.current_epoch_time_ms()?;
         if current_time_ms < self.set_time_ms {
             return Err(hwcrypto_err!(INVALID_KEY, "current time is before expiry set time",));
         }

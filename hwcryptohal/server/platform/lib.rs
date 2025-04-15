@@ -20,9 +20,11 @@ mod client_identification;
 mod device_keys;
 mod ffi_bindings;
 mod rng;
+mod time;
 
 pub use client_identification::TrustyClientIdentification as ClientIdentificationImpl;
 pub use device_keys::TrustyDeviceKeys as DeviceKeysImpl;
 pub use kmr_crypto_boring::aes::BoringAes as AesImpl;
 pub use kmr_crypto_boring::hmac::BoringHmac as HmacImpl;
 pub use rng::PlatformRng as RngImpl;
+pub use time::TrustyDeviceTime as DeviceTimeImpl;

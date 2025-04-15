@@ -29,16 +29,18 @@ mod helpers;
 mod hwcrypto_device_key;
 mod hwcrypto_operations;
 mod opaque_key;
-mod platform_functions;
 mod service_encryption_key;
 
-use hwcryptohalinterfaces::{ClientIdentification, DeviceKeys};
-use hwcryptohalplatform::{AesImpl, ClientIdentificationImpl, DeviceKeysImpl, HmacImpl, RngImpl};
+use hwcryptohalinterfaces::{ClientIdentification, DeviceKeys, DeviceTime};
+use hwcryptohalplatform::{
+    AesImpl, ClientIdentificationImpl, DeviceKeysImpl, DeviceTimeImpl, HmacImpl, RngImpl,
+};
 use kmr_common::crypto::{Aes, Hkdf, Hmac, Rng};
 use static_assertions::assert_impl_all;
 
 assert_impl_all!(ClientIdentificationImpl: ClientIdentification);
 assert_impl_all!(DeviceKeysImpl: DeviceKeys);
+assert_impl_all!(DeviceTimeImpl: DeviceTime);
 
 assert_impl_all!(AesImpl: Aes);
 assert_impl_all!(HmacImpl: Hkdf, Hmac);
