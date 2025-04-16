@@ -31,6 +31,7 @@ MODULE_LIBRARY_DEPS += \
 	trusty/user/app/sample/rust-hello-world-trusted-hal/aidl \
 	trusty/user/base/interface/authmgr-handover/aidl \
 	trusty/user/base/lib/authgraph-rust/boringssl \
+	trusty/user/base/lib/service_manager/client \
 	trusty/user/base/lib/tipc/rust \
 	trusty/user/base/lib/trusty-sys \
 	trusty/user/base/lib/trusty-log \
