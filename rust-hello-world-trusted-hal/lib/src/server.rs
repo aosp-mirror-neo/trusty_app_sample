@@ -17,17 +17,22 @@
 //! Setting up the server for the Hello World Trusted HAL service.
 use crate::hand_over_service::HandoverService;
 use crate::hello_world_trusted_service::HelloWorldService;
+use log::error;
 use rpcbinder::RpcServer;
-use std::ffi::CStr;
+use service_manager::service_name_to_trusty_c_port;
 use std::sync::Arc;
 use tipc::raw::{EventLoop, HandleSetWrapper};
 use tipc::{PortCfg, TipcError};
 
 // Port for the handover service for the HelloWorld trusted service
-pub const HANDOVER_SERVICE_PORT: &CStr = c"com.android.trusty.rust.handover.hello.service.V1";
+pub const HANDOVER_SERVICE_PORT: &str = "IHandover/android.hardware.security.IHelloWorld/default";
 
 // Port for the HelloWorld trusted service
-pub const HELLO_WORLD_TRUSTED_SERVICE_PORT: &CStr = c"com.android.trusty.rust.hello.service.V1";
+// Note: The TAs that host trusted services do not usually register a port handle for a trusted
+// service in their event loop. They register a port handle only for the corresponding hand over
+// service. We define the port name for the trusted service here because it is needed as an input
+// for `on_connect` method that is invoked in the call path of connection handover.
+pub const HELLO_WORLD_TRUSTED_SERVICE_PORT: &str = "android.hardware.security.IHelloWorld/default";
 
 pub fn main_loop() -> Result<(), TipcError> {
     let handle_set_wrapper = Arc::new(HandleSetWrapper::new()?);
@@ -37,7 +42,11 @@ pub fn main_loop() -> Result<(), TipcError> {
 
     // Only the AuthMgr BE TA is allowed to connect
     let handover_service_port_cfg =
-        PortCfg::new_raw(HANDOVER_SERVICE_PORT.into()).allow_ta_connect();
+        PortCfg::new_raw(service_name_to_trusty_c_port(HANDOVER_SERVICE_PORT).map_err(|e| {
+            error!("Failed to construct the handover service port name: {:?}", e);
+            TipcError::UnknownError
+        })?)
+        .allow_ta_connect();
 
     let cb_per_session = move |uuid| {
         HandoverService::new_handover_session(

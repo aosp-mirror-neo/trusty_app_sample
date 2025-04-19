@@ -23,6 +23,7 @@ use authmgr_handover_aidl::binder;
 use binder::{ParcelFileDescriptor, SpIBinder};
 use log::error;
 use rpcbinder::RpcServer;
+use service_manager::service_name_to_trusty_c_port;
 use std::os::fd::AsRawFd;
 use std::sync::{Arc, Weak};
 use tipc::raw::{HandleSetWrapper, ToConnect, WorkToDo};
@@ -83,9 +84,10 @@ impl ITrustedServicesHandover for HandoverService {
         // Prevent the destructor of the handle from calling because it will be closed by the Parcel
         // File Descriptor which owns it.
         core::mem::forget(handle);
-        let hello_service_port_cfg = PortCfg::new_raw(HELLO_WORLD_TRUSTED_SERVICE_PORT.into())
-            .allow_ta_connect()
-            .allow_ns_connect();
+        let hello_service_port_cfg =
+            PortCfg::new_raw(service_name_to_trusty_c_port(HELLO_WORLD_TRUSTED_SERVICE_PORT)?)
+                .allow_ta_connect()
+                .allow_ns_connect();
         let to_connect = ToConnect::new(
             dup_handle,
             Arc::clone(&self.trusted_service),
