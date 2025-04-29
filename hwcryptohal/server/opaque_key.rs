@@ -342,7 +342,7 @@ impl KeyHeaderMetadata {
         let protection_id = ProtectionIdSerializable::try_from(protection_id).map_err(|e| {
             hwcrypto_err!(GENERIC_ERROR, "couldn't convert from protection id {:?}", e,)
         })?;
-        if !self.protection_id_settings.contains_key(&protection_id) {
+        if self.protection_id_settings.contains_key(&protection_id) {
             return Err(hwcrypto_err!(
                 BAD_PARAMETER,
                 "settings for protection id {:?} have already been set",
@@ -1458,7 +1458,7 @@ pub(crate) fn generate_key_material(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use test::{expect, expect_eq};
+    use test::{assert_ok, expect, expect_eq};
     use android_hardware_security_see_hwcrypto::aidl::android::hardware::security::see::hwcrypto::{
         types::{
             AesCipherMode::AesCipherMode, CipherModeParameters::CipherModeParameters,
@@ -1620,6 +1620,28 @@ mod tests {
         expect!(
             process_result.is_err(),
             "shouldn't be able to run an operation with an expired key"
+        )
+    }
+
+    #[test]
+    fn protection_id_can_be_set() {
+        let usage = KeyUse::ENCRYPT_DECRYPT;
+        let key_type = KeyType::AES_256_CBC_PKCS7_PADDING;
+        let policy = KeyPolicy {
+            usage,
+            keyLifetime: KeyLifetime::PORTABLE,
+            keyPermissions: Vec::new(),
+            keyType: key_type,
+            keyManagementKey: false,
+        };
+        let uuid = assert_ok!(Uuid::new_from_string("f41a7796-975a-4279-8cc4-b73f8820430d"));
+        let key = assert_ok!(
+            OpaqueKey::generate_opaque_key(&policy, uuid.clone()),
+            "couldn't generate key"
+        );
+        assert_ok!(
+            key.setProtectionId(ProtectionId::WIDEVINE_OUTPUT_BUFFER, &[OperationType::WRITE]),
+            "couldn't set protectionID"
         )
     }
 }
