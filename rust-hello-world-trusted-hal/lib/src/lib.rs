@@ -16,6 +16,5 @@
 
 //! Entrypoint to the HelloWorld Trusted HAL TA library
 
-mod hand_over_service;
 mod hello_world_trusted_service;
 pub mod server;
