@@ -18,6 +18,7 @@
 //! key generation interface and to process cryptographic operations.
 
 use android_hardware_security_see_hwcrypto::aidl::android::hardware::security::see::hwcrypto::{
+    types::OperationData::OperationData, CryptoOperation::CryptoOperation,
     CryptoOperationResult::CryptoOperationResult, CryptoOperationSet::CryptoOperationSet,
     IHwCryptoOperations::BnHwCryptoOperations, IHwCryptoOperations::IHwCryptoOperations,
 };
@@ -67,6 +68,12 @@ impl IHwCryptoOperations for HwCryptoOperations {
                         .process_all_steps(&mut command_list.operations)?;
                 }
             }
+            // Just keep the command list elements that contain an output that needs to be return to
+            // the caller. At this point CryptoOperation::DataOutput is the only operation returning
+            // data using vectors but only when it contains an OperationData::DataBuffer.
+            command_list
+                .operations
+                .retain(|x| matches!(x, CryptoOperation::DataOutput(OperationData::DataBuffer(_))));
         }
         Ok(results)
     }
