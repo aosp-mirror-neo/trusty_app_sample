@@ -26,20 +26,9 @@ use tipc::{self, ClientIdentifier, PortCfg};
 
 pub(crate) const NUM_IPC_QUEUES: u32 = 4;
 
-fn create_device_key_service(client_identifier: ClientIdentifier) -> Option<SpIBinder> {
-    let uuid = match client_identifier {
-        ClientIdentifier::UUID(uuid) => uuid,
-        _ => {
-            log::error!("Expected a Uuid as client id, got: {:?}", client_identifier);
-            return None;
-        }
-    };
-    let mut client_id = Vec::new();
-    let uuid_string = uuid.to_string();
-    let uuid_bytes = uuid_string.as_bytes();
-    client_id.try_reserve(uuid_bytes.len()).ok()?;
-    client_id.extend_from_slice(uuid_bytes);
-    Some(HwCryptoKey::new_binder(client_id).as_binder())
+fn create_device_key_service(client_id: ClientIdentifier) -> Option<SpIBinder> {
+    let client_id_bytes = client_id.as_tagged_bytes().into_vec();
+    Some(HwCryptoKey::new_binder(client_id_bytes).as_binder())
 }
 
 fn hwcryptohal_port_cfg() -> Result<PortCfg, HwCryptoError> {

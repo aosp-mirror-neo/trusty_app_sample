@@ -22,6 +22,7 @@ use hwcryptohalinterfaces::{ClientIdentity, TestAllocatedPage, TestHelpers};
 use std::alloc::{alloc_zeroed, Layout};
 use std::os::fd::{FromRawFd, OwnedFd};
 use std::sync::{LazyLock, Mutex};
+use tipc::{ClientIdentifier, Uuid};
 
 const OUTPUT_MEMORY_BUFFER_FLAGS: u32 =
     trusty_sys::MMAP_FLAG_PROT_READ | trusty_sys::MMAP_FLAG_PROT_WRITE;
@@ -101,8 +102,18 @@ impl TrustyTestHelpers {
 impl TestHelpers for TrustyTestHelpers {
     fn mock_client_id(identity: ClientIdentity) -> Vec<u8> {
         match identity {
-            ClientIdentity::Identity1 => "f41a7796-975a-4279-8cc4-b73f8820430d".as_bytes().to_vec(),
-            ClientIdentity::Identity2 => "f4240823-21a8-446b-96d4-7e48030827c8".as_bytes().to_vec(),
+            ClientIdentity::Identity1 => {
+                let client_id = ClientIdentifier::UUID(
+                    Uuid::new_from_string("f41a7796-975a-4279-8cc4-b73f8820430d").unwrap(),
+                );
+                client_id.as_tagged_bytes().into_vec()
+            }
+            ClientIdentity::Identity2 => {
+                let client_id = ClientIdentifier::UUID(
+                    Uuid::new_from_string("f4240823-21a8-446b-96d4-7e48030827c8").unwrap(),
+                );
+                client_id.as_tagged_bytes().into_vec()
+            }
         }
     }
 
