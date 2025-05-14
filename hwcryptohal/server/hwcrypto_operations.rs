@@ -86,9 +86,10 @@ mod tests {
     use android_hardware_security_see_hwcrypto::aidl::android::hardware::security::see::hwcrypto::{
         types::{
             AesCipherMode::AesCipherMode, CipherModeParameters::CipherModeParameters,
-            HmacOperationParameters::HmacOperationParameters, KeyLifetime::KeyLifetime,
-            KeyType::KeyType, KeyUse::KeyUse, OperationData::OperationData,
-            SymmetricCryptoParameters::SymmetricCryptoParameters,
+            ExplicitKeyMaterial::ExplicitKeyMaterial,
+            HmacOperationParameters::HmacOperationParameters, HmacKey::HmacKey,
+            KeyLifetime::KeyLifetime, KeyType::KeyType, KeyUse::KeyUse,
+            OperationData::OperationData, SymmetricCryptoParameters::SymmetricCryptoParameters,
             SymmetricOperation::SymmetricOperation,
             SymmetricOperationParameters::SymmetricOperationParameters,
         },
@@ -97,7 +98,7 @@ mod tests {
             DerivedKey::DerivedKey, DerivedKeyParameters::DerivedKeyParameters,
             DerivedKeyPolicy::DerivedKeyPolicy, DeviceKeyId::DeviceKeyId,
             DiceBoundDerivationKey::DiceBoundDerivationKey,
-            DiceCurrentBoundKeyResult::DiceCurrentBoundKeyResult, IHwCryptoKey, KeySlot::KeySlot,
+            DiceCurrentBoundKeyResult::DiceCurrentBoundKeyResult, IHwCryptoKey,
         },
         KeyPolicy::KeyPolicy,
         OperationParameters::OperationParameters,
@@ -217,8 +218,16 @@ mod tests {
         let hw_key: Strong<dyn IHwCryptoKey> =
             RpcSession::new().setup_trusty_client(RUST_SERVICE_PORT).expect("Failed to connect");
 
-        let key =
-            hw_key.getKeyslotData(KeySlot::KEYMINT_SHARED_HMAC_KEY).expect("couldn't get key");
+        let policy = KeyPolicy {
+            usage: KeyUse::SIGN,
+            keyLifetime: KeyLifetime::PORTABLE,
+            keyPermissions: Vec::new(),
+            keyType: KeyType::HMAC_SHA256,
+            keyManagementKey: false,
+        };
+        let hmac_key_material: ExplicitKeyMaterial =
+            ExplicitKeyMaterial::Hmac(HmacKey::Sha256([0; 32]));
+        let key = hw_key.importClearKey(&hmac_key_material, &policy).expect("couldn't import key");
 
         let hw_crypto = hw_key.getHwCryptoOperations().expect("Failed to get crypto ops.");
 
