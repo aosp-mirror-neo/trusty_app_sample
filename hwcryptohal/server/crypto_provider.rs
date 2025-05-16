@@ -17,6 +17,3 @@
 //! Module providing access to the cryptographic implementations used by the library.
 
 pub(crate) use crate::platform_functions::PlatformRng as RngImpl;
-pub(crate) use kmr_crypto_boring::aes::BoringAes as AesImpl;
-pub(crate) use kmr_crypto_boring::hmac::BoringHmac as HmacImpl;
-pub(crate) const HMAC_MAX_SIZE: usize = bssl_sys::EVP_MAX_MD_SIZE as usize;

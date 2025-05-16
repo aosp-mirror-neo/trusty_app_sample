@@ -36,6 +36,7 @@ use binder::binder_impl::Binder;
 use ciborium::Value;
 use core::fmt;
 use coset::{AsCborValue, CborSerializable, CoseError};
+use hwcryptohalplatform::{AesImpl, HmacImpl};
 use hwcryptohal_common::{
     aidl_enum_wrapper, cose_enum_gen,
     err::HwCryptoError,
@@ -977,11 +978,10 @@ impl OpaqueKey {
         let context_with_op_type = context.create_key_derivation_context()?;
         match &self.key_material {
             KeyMaterial::Hmac(key) => {
-                let hkdf = crypto_provider::HmacImpl;
                 let explicit_key = explicit!(key).map_err(|_| {
                     hwcrypto_err!(BAD_PARAMETER, "only explicit HMAC keys supported")
                 })?;
-                let raw_key = hkdf
+                let raw_key = HmacImpl
                     .hkdf(&[], &explicit_key.0, context_with_op_type.as_slice(), derived_key_size)
                     .map_err(|e| hwcrypto_err!(GENERIC_ERROR, "couldn't derive key {:?}", e))?;
                 Ok(raw_key)
@@ -1411,8 +1411,6 @@ pub(crate) fn generate_key_material(
     key_type: &KeyType,
     key_random_bytes: Option<Vec<u8>>,
 ) -> Result<KeyMaterial, HwCryptoError> {
-    let aes = crypto_provider::AesImpl;
-    let hmac = crypto_provider::HmacImpl;
     let mut rng = crypto_provider::RngImpl::default();
     match *key_type {
         KeyType::AES_128_CBC_NO_PADDING
@@ -1448,7 +1446,7 @@ pub(crate) fn generate_key_material(
                     )),
                 }
             } else {
-                Ok(aes.generate_key(&mut rng, variant, &[])?)
+                Ok(AesImpl.generate_key(&mut rng, variant, &[])?)
             }
         }
         KeyType::HMAC_SHA256 | KeyType::HMAC_SHA512 => {
@@ -1465,7 +1463,7 @@ pub(crate) fn generate_key_material(
                     Ok(KeyMaterial::Hmac(crypto::hmac::Key::new(key_bytes).into()))
                 }
             } else {
-                Ok(hmac.generate_key(
+                Ok(HmacImpl.generate_key(
                     &mut rng,
                     kmr_wire::KeySizeInBits((key_size_bytes * 8).try_into().map_err(|_| {
                         hwcrypto_err!(

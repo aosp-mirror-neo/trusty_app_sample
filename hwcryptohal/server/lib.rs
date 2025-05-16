@@ -35,11 +35,15 @@ mod platform_functions;
 mod service_encryption_key;
 
 use hwcryptohalinterfaces::{ClientIdentification, DeviceKeys};
-use hwcryptohalplatform::{ClientIdentificationImpl, DeviceKeysImpl};
+use hwcryptohalplatform::{AesImpl, ClientIdentificationImpl, DeviceKeysImpl, HmacImpl};
+use kmr_common::crypto::{Aes, Hkdf, Hmac};
 use static_assertions::assert_impl_all;
 
 assert_impl_all!(ClientIdentificationImpl: ClientIdentification);
 assert_impl_all!(DeviceKeysImpl: DeviceKeys);
+
+assert_impl_all!(AesImpl: Aes);
+assert_impl_all!(HmacImpl: Hkdf, Hmac);
 
 #[cfg(test)]
 mod tests {

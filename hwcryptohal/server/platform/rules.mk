@@ -29,6 +29,7 @@ MODULE_LIBRARY_DEPS += \
 	trusty/user/app/sample/hwcryptohal/common  \
 	trusty/user/app/sample/hwcryptohal/server/interfaces \
 	trusty/user/base/lib/hwkey/rust \
+	trusty/user/base/lib/keymint-rust/boringssl \
 	trusty/user/base/lib/keymint-rust/common \
 	trusty/user/base/lib/openssl-rust \
 	trusty/user/base/lib/tipc/rust \
