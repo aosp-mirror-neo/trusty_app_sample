@@ -30,7 +30,12 @@ pub(crate) const HANDOVER_SERVICE_PORT: &CStr = c"ahss.hwcrypto.IHwCryptoKey/def
 pub(crate) const NUM_IPC_QUEUES: u32 = 4;
 
 fn create_device_key_service(uuid: Uuid) -> Option<SpIBinder> {
-    Some(hwcrypto_device_key::HwCryptoKey::new_binder(uuid).as_binder())
+    let mut client_id = Vec::new();
+    let uuid_string = uuid.to_string();
+    let uuid_bytes = uuid_string.as_bytes();
+    client_id.try_reserve(uuid_bytes.len()).ok()?;
+    client_id.extend_from_slice(uuid_bytes);
+    Some(hwcrypto_device_key::HwCryptoKey::new_binder(client_id).as_binder())
 }
 
 fn hwcryptohal_port_cfg() -> Result<PortCfg, HwCryptoError> {

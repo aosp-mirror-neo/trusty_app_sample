@@ -33,105 +33,79 @@ use android_hardware_security_see_hwcrypto::aidl::android::hardware::security::s
     KeyPolicy::KeyPolicy,
 };
 use android_hardware_security_see_hwcrypto::binder;
-use ciborium::{cbor, Value};
+use ciborium::Value;
 use coset::{AsCborValue, CborSerializable, CoseError};
 use hwcryptohal_common::{cose_enum_gen, err::HwCryptoError, hwcrypto_err};
-use hwkey::{Hwkey, KdfVersion};
-use tipc::Uuid;
-
-use crate::hwcrypto_operations::HwCryptoOperations;
+use hwcryptohalinterfaces::{ClientIdentification, ClientPolicyCheck, DeviceKeys};
+use hwcryptohalplatform::DeviceKeysImpl;
 
 use crate::helpers;
+use crate::hwcrypto_operations::HwCryptoOperations;
 use crate::opaque_key::{self, DerivationContext, HkdfOperationType, OpaqueKey};
 use crate::service_encryption_key::{
     self, EncryptedContent, EncryptionHeader, EncryptionHeaderKey,
 };
+use hwcryptohalplatform::ClientIdentificationImpl;
 
 const DEVICE_KEY_CTX: &[u8] = b"device_key_derivation_contextKEK";
 
-// enum used for serializing the `VersionContext`
+// enum used for serializing the `ClientPolicyWrapper`
+// ClientPolicyWrapper = {
+//     -65680 : bstr                        ; ClientPolicy
+//     -65681 : bstr                        ; DeviceKeyPolicy
+// }
 cose_enum_gen! {
-    enum VersionContextCoseLabels {
-        Uuid = -65537,
-        Version = -65538,
+    enum ClientPolicyWrapperCoseLabels {
+        ClientPolicy = -65680,
+        DeviceKeyPolicy = -65681,
     }
 }
 
-// TODO: `ConnectionInformation` will be opaque to the HwCrypto service once we have a connection
-//        manager.
-struct ConnectionInformation {
-    uuid: Uuid,
-}
-
-// Mock version object to be used until we have more DICE support. It is based on the trusty version
-// retrievable from HwKey and the uuid of the caller. `VersionContext`` encryption is similar to
-// what KeyMint uses to wrap keys.
-struct VersionContext {
-    uuid: Uuid,
-    version: u32,
+// Object containing the Client policy and device key version. It will encrypt and decrypt them when
+// interacting with the client. The current policy is based on the trusty version retrievable from
+// HwKey and the uuid of the caller. Dice will be added once we have support for it. The device key
+// version is used to retrieve a unique versioned key tied to the HwCrypto server.
+// `ClientPolicyWrapper` encryption is similar to what KeyMint uses to wrap
+// keys. While the stable policy returned by the `ClientPolicyWrapper` only includes the client
+// policy, the generation of the derivation key consumes both this stable policy and the device key
+// version.
+struct ClientPolicyWrapper {
+    client_policy: Vec<u8>,
+    device_key_policy: Vec<u8>,
     header: Option<EncryptionHeader>,
 }
 
-impl VersionContext {
-    fn get_current_version() -> Result<u32, HwCryptoError> {
+impl ClientPolicyWrapper {
+    // decrypts and returns a new `ClientPolicyWrapper`
+    fn from_encrypted_slice(encrypted_wrapped_policy: &[u8]) -> Result<Self, HwCryptoError> {
+        let (wrapped_policy_header, decrypted_data) =
+            EncryptionHeader::decrypt_content_service_encryption_key(
+                encrypted_wrapped_policy,
+                EncryptionHeaderKey::KeyGenerationContext(DEVICE_KEY_CTX),
+                EncryptedContent::ClientPolicy,
+            )?;
+
+        let mut wrapped_policy =
+            ClientPolicyWrapper::from_cbor_value(Value::from_slice(&decrypted_data[..])?)?;
+        wrapped_policy.header = Some(wrapped_policy_header);
+        Ok(wrapped_policy)
+    }
+
+    // returns the current version of the platform device key service
+    fn get_device_key_service_current_version() -> Result<Vec<u8>, HwCryptoError> {
         service_encryption_key::get_service_current_version()
     }
 
-    fn new_current(uuid: Uuid) -> Result<Self, HwCryptoError> {
-        let header = Some(EncryptionHeader::generate(EncryptedContent::DicePolicy)?);
-        let version = Self::get_current_version()?;
-        Ok(VersionContext { uuid, version, header })
+    // returns a new `ClientPolicyWrapper` with the version set to the current client version
+    fn new_current(client_id: &[u8]) -> Result<Self, HwCryptoError> {
+        let header = Some(EncryptionHeader::generate(EncryptedContent::ClientPolicy)?);
+        let device_key_policy = Self::get_device_key_service_current_version()?;
+        let client_policy = ClientIdentificationImpl.get_client_current_policy(client_id)?;
+        Ok(ClientPolicyWrapper { client_policy, device_key_policy, header })
     }
 
-    fn new_current_encrypted(uuid: Uuid) -> Result<Vec<u8>, HwCryptoError> {
-        let ctx = Self::new_current(uuid)?;
-        Ok(ctx.encrypt_context()?)
-    }
-
-    fn check_version(&self) -> Result<(), HwCryptoError> {
-        let current_version = Self::get_current_version()?;
-        if self.version > current_version {
-            return Err(hwcrypto_err!(BAD_PARAMETER, "version is not valid"));
-        }
-        Ok(())
-    }
-
-    fn check_context(&self, connection: ConnectionInformation) -> Result<(), HwCryptoError> {
-        if connection.uuid != self.uuid {
-            return Err(hwcrypto_err!(BAD_PARAMETER, "uuid mismatch"));
-        }
-        self.check_version()
-    }
-
-    fn check_encrypted_context(
-        encrypted_ctx: &[u8],
-        connection: ConnectionInformation,
-    ) -> Result<(), HwCryptoError> {
-        let context = Self::decrypt_context(encrypted_ctx)?;
-        context.check_context(connection)
-    }
-
-    fn is_context_current(encrypted_ctx: &[u8]) -> Result<bool, HwCryptoError> {
-        let context = Self::decrypt_context(encrypted_ctx)?;
-        let current_version = Self::get_current_version()?;
-        Ok(context.version >= current_version)
-    }
-
-    fn decrypt_context(encrypted_context: &[u8]) -> Result<Self, HwCryptoError> {
-        let (version_ctx_header, decrypted_data) =
-            EncryptionHeader::decrypt_content_service_encryption_key(
-                encrypted_context,
-                EncryptionHeaderKey::KeyGenerationContext(DEVICE_KEY_CTX),
-                EncryptedContent::DicePolicy,
-            )?;
-
-        let mut version_context =
-            VersionContext::from_cbor_value(Value::from_slice(&decrypted_data[..])?)?;
-        version_context.header = Some(version_ctx_header);
-        Ok(version_context)
-    }
-
-    fn encrypt_context(mut self) -> Result<Vec<u8>, HwCryptoError> {
+    // consumes a `ClientPolicyWrapper` and returns it encrypted
+    fn encrypt(mut self) -> Result<Vec<u8>, HwCryptoError> {
         let header = self.header.take().ok_or(hwcrypto_err!(BAD_PARAMETER, "no header found"))?;
         header.encrypt_content_service_encryption_key(
             EncryptionHeaderKey::KeyGenerationContext(DEVICE_KEY_CTX),
@@ -139,115 +113,117 @@ impl VersionContext {
         )
     }
 
-    fn get_stable_context(encrypted_context: &[u8]) -> Result<Vec<u8>, HwCryptoError> {
-        let decrypted_context = Self::decrypt_context(encrypted_context)?;
-        Ok(decrypted_context.to_cbor_value()?.to_vec()?)
+    // returns both the client policy and the device key version contained by the
+    // `ClientPolicyWrapper`
+    fn into_client_and_device_key_policies(self) -> Result<(Vec<u8>, Vec<u8>), HwCryptoError> {
+        Ok((self.client_policy, self.device_key_policy))
     }
 }
 
-impl AsCborValue for VersionContext {
+impl AsCborValue for ClientPolicyWrapper {
     fn to_cbor_value(self) -> Result<Value, CoseError> {
-        cbor!({
-            (VersionContextCoseLabels::Uuid as i64) => self.uuid.to_string(),
-            (VersionContextCoseLabels::Version as i64) => self.version,
-        })
-        .map_err(|_| CoseError::ExtraneousData)
+        let mut cbor_map = Vec::<(Value, Value)>::new();
+        cbor_map.try_reserve(2).map_err(|_| CoseError::EncodeFailed)?;
+
+        let key = Value::Integer((ClientPolicyWrapperCoseLabels::ClientPolicy as i64).into());
+        let value = Value::Bytes(self.client_policy);
+        cbor_map.push((key, value));
+
+        let key = Value::Integer((ClientPolicyWrapperCoseLabels::DeviceKeyPolicy as i64).into());
+        let value = Value::Bytes(self.device_key_policy);
+        cbor_map.push((key, value));
+
+        Ok(Value::Map(cbor_map))
     }
 
     fn from_cbor_value(value: Value) -> Result<Self, CoseError> {
-        let version_context = value.into_map().map_err(|_| CoseError::ExtraneousData)?;
-        let mut uuid: Option<Uuid> = None;
-        let mut version: Option<u32> = None;
-        for (map_key, map_val) in version_context {
+        let wrapped_policy = value.into_map().map_err(|_| CoseError::ExtraneousData)?;
+        let mut client_policy: Option<Vec<u8>> = None;
+        let mut device_key_policy: Option<Vec<u8>> = None;
+        for (map_key, map_val) in wrapped_policy {
             match map_key {
                 Value::Integer(key) => {
-                    match key.try_into().map_err(|_| CoseError::EncodeFailed)? {
-                        VersionContextCoseLabels::Uuid => {
-                            let uuid_str =
-                                map_val.into_text().map_err(|_| CoseError::EncodeFailed)?;
-                            let parsed_uuid = Uuid::new_from_string(&uuid_str)
-                                .map_err(|_| CoseError::EncodeFailed)?;
-                            uuid = Some(parsed_uuid);
+                    match key.try_into().map_err(|_| {
+                        CoseError::UnexpectedItem(
+                            "value not matching enum",
+                            "ClientPolicyWrapperCoseLabels",
+                        )
+                    })? {
+                        ClientPolicyWrapperCoseLabels::ClientPolicy => {
+                            client_policy =
+                                Some(map_val.into_bytes().map_err(|_| {
+                                    CoseError::UnexpectedItem("other type", "Bytes")
+                                })?);
                         }
-                        VersionContextCoseLabels::Version => {
+                        ClientPolicyWrapperCoseLabels::DeviceKeyPolicy => {
                             let parsed_version = map_val
-                                .into_integer()
-                                .map_err(|_| CoseError::EncodeFailed)?
-                                .try_into()
-                                .map_err(|_| CoseError::ExtraneousData)?;
-                            version = Some(parsed_version);
+                                .into_bytes()
+                                .map_err(|_| CoseError::UnexpectedItem("other type", "Bytes"))?;
+                            device_key_policy = Some(parsed_version);
                         }
                     }
                 }
                 _ => return Err(CoseError::ExtraneousData),
             }
         }
-        let uuid = uuid.ok_or(CoseError::EncodeFailed)?;
-        let version = version.ok_or(CoseError::EncodeFailed)?;
+        let client_policy = client_policy.ok_or(CoseError::EncodeFailed)?;
+        let device_key_policy = device_key_policy.ok_or(CoseError::EncodeFailed)?;
         // Header travels in the clear, the decoded section only contains the encrypted fields
-        Ok(VersionContext { uuid, version, header: None })
+        Ok(ClientPolicyWrapper { client_policy, device_key_policy, header: None })
     }
 }
 
 /// The `IHwCryptoKey` implementation.
 #[derive(Debug)]
 pub struct HwCryptoKey {
-    pub(crate) uuid: Uuid,
+    pub(crate) client_id: Vec<u8>,
 }
 
 impl binder::Interface for HwCryptoKey {}
 
 impl HwCryptoKey {
-    pub(crate) fn new_binder(uuid: Uuid) -> binder::Strong<dyn IHwCryptoKey> {
-        let hwcrypto_device_key = HwCryptoKey { uuid };
+    pub fn new_binder(client_id: Vec<u8>) -> binder::Strong<dyn IHwCryptoKey> {
+        let hwcrypto_device_key = HwCryptoKey { client_id };
         BnHwCryptoKey::new_binder(hwcrypto_device_key, binder::BinderFeatures::default())
     }
 
-    // check_dice_policy_owner shall only be false for creating internal keys that can be used
+    // check_client_policy_owner shall only be false for creating internal keys that can be used
     // to seal content bounded to another party DICE policy
     pub(crate) fn derive_dice_policy_bound_key(
         &self,
         derivation_key: &DiceBoundDerivationKey,
-        dice_policy_for_key_version: &[u8],
-        check_dice_policy_owner: bool,
+        client_policy_for_versioned_key: &[u8],
+        check_client_policy_owner: bool,
     ) -> Result<DiceBoundKeyResult, HwCryptoError> {
         // Verifying provided DICE policy
-        let connection_info: ConnectionInformation =
-            ConnectionInformation { uuid: self.uuid.clone() };
-        if check_dice_policy_owner {
-            VersionContext::check_encrypted_context(dice_policy_for_key_version, connection_info)?;
+        let (caller_client_policy, device_key_policy) =
+            ClientPolicyWrapper::from_encrypted_slice(client_policy_for_versioned_key)?
+                .into_client_and_device_key_policies()?;
+        let ClientPolicyCheck { policy_matches, policy_is_current } = ClientIdentificationImpl
+            .check_client_policy(self.client_id.as_slice(), caller_client_policy.as_slice())?;
+        if check_client_policy_owner && !policy_matches {
+            return Err(hwcrypto_err!(BAD_PARAMETER, "client identity mismatch"));
         }
-        // Getting back a stable DICE policy for context, so keys derived with the same version will
-        // match
-        let dice_context = VersionContext::get_stable_context(dice_policy_for_key_version)?;
         let mut op_context = DerivationContext::new(HkdfOperationType::DiceBoundDerivation)?;
-        op_context.add_owned_binary_string(dice_context)?;
+        // Using the decrypted (stable) DICE policy for context, so keys derived with the same
+        // version will match
+        op_context.add_owned_binary_string(caller_client_policy)?;
         let concat_context = op_context.create_key_derivation_context()?;
 
         // The returned key will only be used for derivation, so fixing tis type to HMAC_SHA256
         let key_type = KeyType::HMAC_SHA256;
         let key_size = opaque_key::get_key_size_in_bytes(&key_type)?;
-        // Create an array big enough to hold the bytes of the derived key material
-        let mut derived_key = Vec::<u8>::new();
-        derived_key.try_reserve(key_size)?;
-        derived_key.resize(key_size, 0);
 
         match derivation_key {
             DiceBoundDerivationKey::KeyId(key_id) => {
-                let hwkey_session = Hwkey::open().map_err(|e| {
-                    hwcrypto_err!(GENERIC_ERROR, "could not connect to hwkey service {:?}", e)
-                })?;
-                let session_req = match *key_id {
-                    DeviceKeyId::DEVICE_BOUND_KEY => {
-                        Ok(hwkey_session.derive_key_req().unique_key())
-                    }
-                    _ => Err(hwcrypto_err!(UNSUPPORTED, "unknown key id {:?}", key_id)),
-                }?;
-
-                session_req
-                    .kdf(KdfVersion::Best)
-                    .derive(concat_context.as_slice(), &mut derived_key[..])
-                    .map_err(|e| hwcrypto_err!(GENERIC_ERROR, "failed to derive key {:?}", e))?;
+                if DeviceKeyId::DEVICE_BOUND_KEY != *key_id {
+                    return Err(hwcrypto_err!(UNSUPPORTED, "unknown key id {:?}", key_id));
+                }
+                let derived_key = DeviceKeysImpl.derive_caller_unique_key(
+                    concat_context.as_slice(),
+                    device_key_policy.as_slice(),
+                    key_size,
+                )?;
 
                 let policy = KeyPolicy {
                     usage: KeyUse::DERIVE,
@@ -258,13 +234,11 @@ impl HwCryptoKey {
                 };
                 // Create a new opaque key from the generated key material
                 let km = opaque_key::generate_key_material(&policy.keyType, Some(derived_key))?;
-                let key = opaque_key::OpaqueKey::new_binder(&policy, km, self.uuid.clone())
+                let key = opaque_key::OpaqueKey::new_binder(&policy, km, self.client_id.as_slice())
                     .map_err(|e| hwcrypto_err!(GENERIC_ERROR, "failed to create key {:?}", e))?;
-                let dice_policy_current =
-                    VersionContext::is_context_current(dice_policy_for_key_version)?;
                 Ok(DiceBoundKeyResult {
                     diceBoundKey: Some(key),
-                    dicePolicyWasCurrent: dice_policy_current,
+                    dicePolicyWasCurrent: policy_is_current,
                 })
             }
             DiceBoundDerivationKey::OpaqueKey(_opaque_key) => Err(hwcrypto_err!(
@@ -274,12 +248,11 @@ impl HwCryptoKey {
         }
     }
 
-    fn check_caller_can_access_keyslot(&self, _keyslot: KeySlot) -> Result<(), HwCryptoError> {
-        // Simple uuid check for host uuid until we have DICE
-        if self.uuid.to_string() == "00000000-0000-0000-0000-000000000000" {
-            Err(hwcrypto_err!(UNAUTHORIZED, "caller do not have permission to access this key"))
-        } else {
+    fn check_caller_can_access_keyslot(&self, keyslot: KeySlot) -> Result<(), HwCryptoError> {
+        if ClientIdentificationImpl.client_can_access_keyslot(self.client_id.as_slice(), keyslot)? {
             Ok(())
+        } else {
+            Err(hwcrypto_err!(UNAUTHORIZED, "caller do not have permission to access this key"))
         }
     }
 }
@@ -289,9 +262,10 @@ impl IHwCryptoKey for HwCryptoKey {
         &self,
         derivation_key: &DiceBoundDerivationKey,
     ) -> binder::Result<DiceCurrentBoundKeyResult> {
-        let dice_policy = VersionContext::new_current_encrypted(self.uuid.clone())?;
+        let client_policy =
+            ClientPolicyWrapper::new_current(self.client_id.as_slice())?.encrypt()?;
         let derived_key_result =
-            self.derive_dice_policy_bound_key(derivation_key, &dice_policy, true)?;
+            self.derive_dice_policy_bound_key(derivation_key, &client_policy, true)?;
         let DiceBoundKeyResult { diceBoundKey: key, dicePolicyWasCurrent: policy_current } =
             derived_key_result;
         if !policy_current {
@@ -300,32 +274,36 @@ impl IHwCryptoKey for HwCryptoKey {
                 Some("generated a policy that was not the latest"),
             ));
         }
-        Ok(DiceCurrentBoundKeyResult { diceBoundKey: key, dicePolicyForKeyVersion: dice_policy })
+        Ok(DiceCurrentBoundKeyResult { diceBoundKey: key, dicePolicyForKeyVersion: client_policy })
     }
 
     fn deriveDicePolicyBoundKey(
         &self,
         derivation_key: &DiceBoundDerivationKey,
-        dice_policy_for_key_version: &[u8],
+        client_policy_for_versioned_key: &[u8],
     ) -> binder::Result<DiceBoundKeyResult> {
-        Ok(self.derive_dice_policy_bound_key(derivation_key, dice_policy_for_key_version, true)?)
+        Ok(self.derive_dice_policy_bound_key(
+            derivation_key,
+            client_policy_for_versioned_key,
+            true,
+        )?)
     }
 
     fn getCurrentDicePolicy(&self) -> binder::Result<Vec<u8>> {
-        Ok(VersionContext::new_current_encrypted(self.uuid.clone())?)
+        Ok(ClientPolicyWrapper::new_current(self.client_id.as_slice())?.encrypt()?)
     }
 
     fn keyTokenImport(
         &self,
         key_token: &OpaqueKeyToken,
-        sealing_dice_policy: &[u8],
+        sealing_client_policy: &[u8],
     ) -> binder::Result<binder::Strong<dyn IOpaqueKey>> {
         // We derive a normal DICE bound key. This will check that the policy matches
         // our DICE chain.
         let DiceBoundKeyResult { diceBoundKey: key, dicePolicyWasCurrent: _ } = self
             .deriveDicePolicyBoundKey(
                 &DiceBoundDerivationKey::KeyId(DeviceKeyId::DEVICE_BOUND_KEY),
-                sealing_dice_policy,
+                sealing_client_policy,
             )?;
         let key = key.ok_or(binder::Status::new_exception_str(
             binder::ExceptionCode::UNSUPPORTED_OPERATION,
@@ -341,7 +319,7 @@ impl IHwCryptoKey for HwCryptoKey {
         Ok(opaque_key::OpaqueKey::import_token(
             key_token.keyToken.as_slice(),
             sealing_key,
-            self.uuid.clone(),
+            self.client_id.as_slice(),
         )?
         .into())
     }
@@ -384,7 +362,7 @@ impl IHwCryptoKey for HwCryptoKey {
                 let derived_key = derivation_key.derive_opaque_key(
                     key_policy,
                     parameters.context.as_slice(),
-                    self.uuid.clone(),
+                    self.client_id.as_slice(),
                 )?;
                 Ok(DerivedKey::Opaque(Some(derived_key)))
             }
@@ -401,18 +379,19 @@ impl IHwCryptoKey for HwCryptoKey {
         new_key_policy: &KeyPolicy,
     ) -> binder::Result<binder::Strong<dyn IOpaqueKey>> {
         let key_material = helpers::aidl_explicit_key_to_rust_key_material(key_to_be_imported)?;
-        Ok(OpaqueKey::import_key_material(new_key_policy, key_material, self.uuid.clone())?)
+        OpaqueKey::import_key_material(new_key_policy, key_material, self.client_id.as_slice())
     }
 
     fn getKeyslotData(&self, keyslot: KeySlot) -> binder::Result<binder::Strong<dyn IOpaqueKey>> {
         self.check_caller_can_access_keyslot(keyslot)?;
         match keyslot {
             KeySlot::KEYMINT_SHARED_HMAC_KEY => {
-                let key_generator =
-                    EncryptionHeader::generate_with_version(0, EncryptedContent::KeyMaterial);
-                let mock_hmac_key = key_generator.derive_raw_service_encryption_key(
-                    EncryptionHeaderKey::KeyGenerationContext(b"hmac_key_ctx"),
-                )?;
+                let hmac_key = DeviceKeysImpl.get_keymint_shared_hmac_key()?.0;
+                let mut hmac_key_vec = Vec::new();
+                hmac_key_vec.try_reserve(hmac_key.len()).map_err(|e| {
+                    hwcrypto_err!(ALLOCATION_ERROR, "failed to space for key key {:?}", e)
+                })?;
+                hmac_key_vec.extend_from_slice(&hmac_key);
                 let policy = KeyPolicy {
                     usage: KeyUse::SIGN,
                     keyLifetime: KeyLifetime::HARDWARE,
@@ -420,7 +399,11 @@ impl IHwCryptoKey for HwCryptoKey {
                     keyType: KeyType::HMAC_SHA256,
                     keyManagementKey: false,
                 };
-                OpaqueKey::new_opaque_key_from_raw_bytes(&policy, mock_hmac_key, self.uuid.clone())
+                OpaqueKey::new_opaque_key_from_raw_bytes(
+                    &policy,
+                    hmac_key_vec,
+                    self.client_id.as_slice(),
+                )
             }
             _ => Err(binder::Status::new_exception_str(
                 binder::ExceptionCode::UNSUPPORTED_OPERATION,
@@ -451,6 +434,8 @@ mod tests {
     use binder::Strong;
     use rpcbinder::RpcSession;
     use test::{assert_ok, expect, expect_eq};
+
+    use crate::tests::{connection_info, unauthorized_connection_info};
 
     #[test]
     fn import_clear_aes_key() {
@@ -571,9 +556,7 @@ mod tests {
 
     #[test]
     fn derived_dice_bound_keys() {
-        let hw_device_key = HwCryptoKey::new_binder(
-            Uuid::new_from_string("f41a7796-975a-4279-8cc4-b73f8820430d").unwrap(),
-        );
+        let hw_device_key = HwCryptoKey::new_binder(connection_info());
 
         let derivation_key = DiceBoundDerivationKey::KeyId(DeviceKeyId::DEVICE_BOUND_KEY);
         let key_and_policy =
@@ -606,9 +589,7 @@ mod tests {
 
     #[test]
     fn derived_clear_key() {
-        let hw_device_key = HwCryptoKey::new_binder(
-            Uuid::new_from_string("f41a7796-975a-4279-8cc4-b73f8820430d").unwrap(),
-        );
+        let hw_device_key = HwCryptoKey::new_binder(connection_info());
 
         let derivation_key = DiceBoundDerivationKey::KeyId(DeviceKeyId::DEVICE_BOUND_KEY);
         let key_and_policy =
@@ -679,14 +660,14 @@ mod tests {
             hw_crypto_key.importClearKey(&clear_key, &policy),
             "couldn't import clear key"
         );
-        let dice_policy =
+        let client_policy =
             assert_ok!(hw_crypto_key.getCurrentDicePolicy(), "Couldn't get dice policy back");
         let token = assert_ok!(
-            key.getShareableToken(dice_policy.as_slice()),
+            key.getShareableToken(client_policy.as_slice()),
             "Couldn't get shareable token"
         );
         let imported_key = assert_ok!(
-            hw_crypto_key.keyTokenImport(&token, dice_policy.as_slice()),
+            hw_crypto_key.keyTokenImport(&token, client_policy.as_slice()),
             "Couldn't import shareable token"
         );
 
@@ -766,10 +747,10 @@ mod tests {
             ExplicitKeyMaterial::Aes(AesKey::Aes128([0; 16]));
         let key = hw_key.importClearKey(&aes_key_material, &policy).expect("couldn't import key");
 
-        let sealing_dice_policy =
+        let sealing_client_policy =
             hw_key.getCurrentDicePolicy().expect("couldn't get sealing policy");
 
-        let token = key.getShareableToken(&sealing_dice_policy);
+        let token = key.getShareableToken(&sealing_client_policy);
         expect!(token.is_ok(), "couldn't get shareadble token");
         let token = token.unwrap();
 
@@ -801,7 +782,7 @@ mod tests {
         let hw_key: Strong<dyn IHwCryptoKey> =
             RpcSession::new().setup_trusty_client(RUST_SERVICE_PORT).expect("Failed to connect");
         let hw_crypto = hw_key.getHwCryptoOperations().expect("couldn't get key crypto ops.");
-        let key = hw_key.keyTokenImport(&token, &sealing_dice_policy);
+        let key = hw_key.keyTokenImport(&token, &sealing_client_policy);
         expect!(key.is_ok(), "couldn't import shareable token");
         let key = key.unwrap();
 
@@ -851,37 +832,26 @@ mod tests {
         };
         let key = hw_key.importClearKey(&aes_key_material, &policy).expect("couldn't import key");
 
-        let sealing_dice_policy =
+        let sealing_client_policy =
             hw_key.getCurrentDicePolicy().expect("couldn't get sealing policy");
 
-        let token = key.getShareableToken(&sealing_dice_policy);
+        let token = key.getShareableToken(&sealing_client_policy);
         expect!(token.is_ok(), "couldn't get shareadble token");
         let token = token.unwrap();
 
-        let bad_dice_policy = VersionContext::new_current_encrypted(
-            Uuid::new_from_string("f41a7796-975a-427a-8cc4-a73f8820430d").unwrap(),
-        )
-        .expect("couldn't create DICE policy");
+        let bad_client_policy = assert_ok!(
+            ClientPolicyWrapper::new_current(&connection_info()),
+            "couldn't create DICE policy"
+        );
+        let bad_client_policy = assert_ok!(bad_client_policy.encrypt(), "couldn't encrypt policy");
 
-        let key = hw_key.keyTokenImport(&token, &bad_dice_policy);
+        let key = hw_key.keyTokenImport(&token, &bad_client_policy);
         expect!(key.is_err(), "shouldn't be able to import key using the wrong DICE policy");
     }
 
     #[test]
-    fn get_keyslot() {
-        let hw_key: Strong<dyn IHwCryptoKey> =
-            RpcSession::new().setup_trusty_client(RUST_SERVICE_PORT).expect("Failed to connect");
-
-        let key = hw_key.getKeyslotData(KeySlot::KEYMINT_SHARED_HMAC_KEY);
-        expect!(key.is_ok(), "couldn't get key");
-    }
-
-    #[test]
     fn get_keyslot_form_unautorized_caller() {
-        let hw_key = HwCryptoKey::new_binder(
-            Uuid::new_from_string("00000000-0000-0000-0000-000000000000")
-                .expect("couldn't create uuid"),
-        );
+        let hw_key = HwCryptoKey::new_binder(unauthorized_connection_info());
         let key = hw_key.getKeyslotData(KeySlot::KEYMINT_SHARED_HMAC_KEY);
         expect!(key.is_err(), "shouldn't be able to get key");
     }

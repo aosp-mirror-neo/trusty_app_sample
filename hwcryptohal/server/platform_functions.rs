@@ -23,14 +23,6 @@ use crate::ffi_bindings;
 
 const NANOSECONDS_IN_1_MS: u64 = 1000000;
 
-// Placeholder for function to compare VM identities. Identities will probably be based on DICE,
-// a simple comparison could be done if the DICE chains are unencrypted and the order of fields is
-// always the same.
-#[allow(dead_code)]
-pub(crate) fn compare_vm_identities(vm1_identity: &[u8], vm2_identity: &[u8]) -> bool {
-    (vm1_identity.len() == vm2_identity.len()) && openssl::memcmp::eq(vm1_identity, vm2_identity)
-}
-
 #[derive(Default)]
 pub(crate) struct PlatformRng;
 

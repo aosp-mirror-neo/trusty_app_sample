@@ -51,7 +51,6 @@ use kmr_common::{
 };
 use kmr_wire::{keymint::EcCurve, AsCborValue as _};
 use std::sync::{Mutex, OnceLock};
-use tipc::Uuid;
 
 use crate::helpers;
 use crate::hwcrypto_device_key::HwCryptoKey;
@@ -264,7 +263,6 @@ impl AsCborValue for ExpirationTime {
     }
 
     fn from_cbor_value(value: Value) -> Result<Self, CoseError> {
-        //unimplemented!("sdsdsdsd")
         let opaque_key_map = value.into_map().map_err(|_| CoseError::ExtraneousData)?;
         if opaque_key_map.len() != 2 {
             return Err(CoseError::ExtraneousData);
@@ -658,6 +656,7 @@ pub struct OpaqueKey {
     pub(crate) key_header: KeyHeader,
     pub(crate) key_material: KeyMaterial,
     pub(crate) key_in_owner_control: bool,
+    client_id: Option<Vec<u8>>,
 }
 
 impl From<OpaqueKey> for binder::Strong<dyn IOpaqueKey> {
@@ -761,7 +760,7 @@ impl AsCborValue for OpaqueKey {
             .map_err(|_| CoseError::EncodeFailed)?;
         let key_metadata = key_metadata.ok_or(CoseError::EncodeFailed)?;
         key_header.set_metadata_from_cbor(key_metadata).map_err(|_| CoseError::EncodeFailed)?;
-        Ok(OpaqueKey { key_material, key_header, key_in_owner_control: false })
+        Ok(OpaqueKey { key_material, key_header, key_in_owner_control: false, client_id: None })
     }
 }
 
@@ -769,11 +768,21 @@ impl OpaqueKey {
     pub(crate) fn new_binder(
         policy: &KeyPolicy,
         key_material: KeyMaterial,
-        _connection_info: Uuid,
+        client_conn_id: &[u8],
     ) -> binder::Result<binder::Strong<dyn IOpaqueKey>> {
         let key_header = KeyHeader::new(policy)?;
         check_key_material_with_policy(&key_material, policy)?;
-        let opaque_key = OpaqueKey { key_header, key_material, key_in_owner_control: true };
+        let mut client_id = Vec::new();
+        client_id
+            .try_reserve(client_conn_id.len())
+            .map_err(|_| hwcrypto_err!(ALLOCATION_ERROR, "couldn't allcoate client id"))?;
+        client_id.extend_from_slice(client_conn_id);
+        let opaque_key = OpaqueKey {
+            key_header,
+            key_material,
+            key_in_owner_control: true,
+            client_id: Some(client_id),
+        };
         let opaque_keybinder =
             BnOpaqueKey::new_binder(opaque_key, binder::BinderFeatures::default());
         Ok(opaque_keybinder)
@@ -792,11 +801,11 @@ impl OpaqueKey {
     pub(crate) fn import_key_material(
         policy: &KeyPolicy,
         key_material: KeyMaterial,
-        connection_info: Uuid,
+        client_conn_id: &[u8],
     ) -> binder::Result<binder::Strong<dyn IOpaqueKey>> {
         check_key_material_with_policy(&key_material, policy)?;
         Self::check_clear_import_policy(policy)?;
-        Self::new_binder(policy, key_material, connection_info)
+        Self::new_binder(policy, key_material, client_conn_id)
     }
 
     fn check_ownership(&self) -> bool {
@@ -817,12 +826,12 @@ impl OpaqueKey {
         key.set_expiration_time(TOKEN_EXPORT_EXPIRATION_TIME_10S)?;
         let token_creator = EncryptionHeader::generate(EncryptedContent::KeyMaterial)?;
 
-        // This is a temporary workaround to create a DICE bound key because we will move to
-        // using DICE policies and the AuthMgr instead of UUIDs.
-        let hw_device_key = HwCryptoKey {
-            uuid: Uuid::new_from_string("ffffffff-ffff-ffff-ffff-ffffffffffff")
-                .expect("shouldn't happen, string can be parsed to uuid"),
-        };
+        let mut client_id = Vec::new();
+        let client_conn_id =
+            self.client_id.as_ref().ok_or(hwcrypto_err!(GENERIC_ERROR, "key has no client id"))?;
+        client_id.try_reserve(client_conn_id.len())?;
+        client_id.extend_from_slice(client_conn_id.as_slice());
+        let hw_device_key = HwCryptoKey { client_id };
 
         // Create a DICE key bound to the receiver policy.
         let DiceBoundKeyResult { diceBoundKey: sealing_dice_key, dicePolicyWasCurrent: _ } =
@@ -856,7 +865,7 @@ impl OpaqueKey {
     pub(crate) fn import_token(
         key_token: &[u8],
         sealing_dice_key: OpaqueKey,
-        _connection_information: Uuid,
+        _client_conn_id: &[u8],
     ) -> Result<Self, HwCryptoError> {
         // External encryption layer used a HwCrypto service device key
         let (_, content) = EncryptionHeader::decrypt_content_service_encryption_key(
@@ -884,6 +893,9 @@ impl OpaqueKey {
             EncryptedContent::KeyMaterial,
         )?;
 
+        // We are not propagating _client_conn_id into the imported key. Currently connection
+        // information is only used to export keys and keys imported by the client should not be
+        // re-exported.
         let opaque_key = Self::from_cbor_value(Value::from_slice(inner_key.as_slice())?)?;
         if !opaque_key.expiration_time_set()? {
             return Err(hwcrypto_err!(
@@ -898,25 +910,39 @@ impl OpaqueKey {
     #[allow(unused)]
     pub(crate) fn generate_opaque_key(
         policy: &KeyPolicy,
-        connection_info: Uuid,
+        client_conn_id: &[u8],
     ) -> binder::Result<binder::Strong<dyn IOpaqueKey>> {
         let key_material = generate_key_material(&policy.keyType, None)?;
-        OpaqueKey::new_binder(policy, key_material, connection_info)
+        OpaqueKey::new_binder(policy, key_material, client_conn_id)
     }
 
     fn try_clone(&self) -> Result<Self, HwCryptoError> {
         let key_header = self.key_header.try_clone()?;
         let key_material = self.key_material.clone();
-        Ok(OpaqueKey { key_header, key_material, key_in_owner_control: self.key_in_owner_control })
+        let client_id = if self.client_id.is_some() {
+            let mut client_id = Vec::new();
+            let client_conn_id = self.client_id.as_ref().unwrap();
+            client_id.try_reserve(client_conn_id.len())?;
+            client_id.extend_from_slice(client_conn_id.as_slice());
+            Some(client_id)
+        } else {
+            None
+        };
+        Ok(OpaqueKey {
+            key_header,
+            key_material,
+            key_in_owner_control: self.key_in_owner_control,
+            client_id,
+        })
     }
 
     pub(crate) fn new_opaque_key_from_raw_bytes(
         policy: &KeyPolicy,
         key_material: Vec<u8>,
-        connection_info: Uuid,
+        client_conn_id: &[u8],
     ) -> binder::Result<binder::Strong<dyn IOpaqueKey>> {
         let key_material = generate_key_material(&policy.keyType, Some(key_material))?;
-        OpaqueKey::new_binder(policy, key_material, connection_info)
+        OpaqueKey::new_binder(policy, key_material, client_conn_id)
     }
 
     pub(crate) fn check_key_derivation_parameters(
@@ -999,7 +1025,7 @@ impl OpaqueKey {
         &self,
         policy: &[u8],
         context: &[u8],
-        connection_info: Uuid,
+        client_conn_id: &[u8],
     ) -> binder::Result<binder::Strong<dyn IOpaqueKey>> {
         self.expiration_time_valid()?;
         let aidl_policy = policy::cbor_policy_to_aidl(policy)?;
@@ -1009,7 +1035,7 @@ impl OpaqueKey {
         op_context.add_binary_string(policy)?;
         op_context.add_binary_string(context)?;
         let raw_key_material = self.derive_raw_key_material(op_context, derived_key_size)?;
-        Self::new_opaque_key_from_raw_bytes(&aidl_policy, raw_key_material, connection_info)
+        Self::new_opaque_key_from_raw_bytes(&aidl_policy, raw_key_material, client_conn_id)
     }
 
     fn derivation_allowed_lifetime(
@@ -1471,7 +1497,9 @@ mod tests {
         KeyPolicy::KeyPolicy,
         OperationParameters::OperationParameters,
     };
+
     use crate::cmd_processing::CmdProcessorContext;
+    use crate::tests::connection_info;
 
     #[test]
     fn boot_unique_values_match() {
@@ -1563,9 +1591,8 @@ mod tests {
             keyType: key_type,
             keyManagementKey: false,
         };
-        let uuid = Uuid::new_from_string("f41a7796-975a-4279-8cc4-b73f8820430d").unwrap();
-        let key =
-            OpaqueKey::generate_opaque_key(&policy, uuid.clone()).expect("couldn't generate key");
+        let uuid = connection_info();
+        let key = OpaqueKey::generate_opaque_key(&policy, &uuid).expect("couldn't generate key");
         let hw_device_key = HwCryptoKey::new_binder(uuid);
         let sealing_dice_policy =
             hw_device_key.getCurrentDicePolicy().expect("couldn't get sealing policy");
@@ -1594,9 +1621,8 @@ mod tests {
             keyType: key_type,
             keyManagementKey: false,
         };
-        let uuid = Uuid::new_from_string("f41a7796-975a-4279-8cc4-b73f8820430d").unwrap();
-        let key =
-            OpaqueKey::generate_opaque_key(&policy, uuid.clone()).expect("couldn't generate key");
+        let uuid = connection_info();
+        let key = OpaqueKey::generate_opaque_key(&policy, &uuid).expect("couldn't generate key");
         let key: OpaqueKey = (&key).try_into().expect("couldn't cast back key");
         key.set_expiration_time(0).expect("couldn't set up expiration time");
         let binder_key = BnOpaqueKey::new_binder(key, binder::BinderFeatures::default());
@@ -1634,11 +1660,9 @@ mod tests {
             keyType: key_type,
             keyManagementKey: false,
         };
-        let uuid = assert_ok!(Uuid::new_from_string("f41a7796-975a-4279-8cc4-b73f8820430d"));
-        let key = assert_ok!(
-            OpaqueKey::generate_opaque_key(&policy, uuid.clone()),
-            "couldn't generate key"
-        );
+        let uuid = connection_info();
+        let key =
+            assert_ok!(OpaqueKey::generate_opaque_key(&policy, &uuid), "couldn't generate key");
         assert_ok!(
             key.setProtectionId(ProtectionId::WIDEVINE_OUTPUT_BUFFER, &[OperationType::WRITE]),
             "couldn't set protectionID"
