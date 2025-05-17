@@ -703,12 +703,8 @@ mod tests {
         KeyPolicy::KeyPolicy,
     };
     use test::{expect, expect_eq};
-    use tipc::Uuid;
 
-    fn connection_info() -> Uuid {
-        // TODO: This is a temporary mock function for testing until we move to use DICE policies.
-        Uuid::new_from_string("f41a7796-975a-4279-8cc4-b73f8820430d").unwrap()
-    }
+    use crate::tests::connection_info;
 
     #[test]
     fn use_aes_key() {
@@ -721,7 +717,7 @@ mod tests {
             keyType: key_type,
             keyManagementKey: false,
         };
-        let handle = OpaqueKey::generate_opaque_key(&policy, connection_info())
+        let handle = OpaqueKey::generate_opaque_key(&policy, &connection_info())
             .expect("couldn't generate key");
         let nonce = [0u8; 16];
         let parameters = SymmetricCryptoParameters::Aes(AesCipherMode::Cbc(CipherModeParameters {
@@ -808,7 +804,7 @@ mod tests {
             keyType: key_type,
             keyManagementKey: false,
         };
-        let handle = OpaqueKey::generate_opaque_key(&policy, connection_info())
+        let handle = OpaqueKey::generate_opaque_key(&policy, &connection_info())
             .expect("couldn't generate key");
         let nonce = [0u8; 16];
         let parameters = SymmetricCryptoParameters::Aes(AesCipherMode::Cbc(CipherModeParameters {

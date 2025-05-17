@@ -25,6 +25,7 @@ MODULE_SRCS += \
 MODULE_CRATE_NAME := hwcryptohalinterfaces
 
 MODULE_LIBRARY_DEPS += \
+	trusty/user/app/sample/hwcryptohal/aidl/rust  \
 	trusty/user/app/sample/hwcryptohal/common  \
 
 include make/library.mk
