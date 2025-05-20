@@ -75,6 +75,8 @@ static tipc_port test_ctl_port = {
 struct ConsumerCtx {
     void* shm_ptr;
     int atom_cnt;
+    tipc_hset* hset;
+    tipc_work_todo recurring_work;
     android::sp<StatsConsumer> stats_consumer;
     android::sp<IStatsSetter> istats_setter;
 };
@@ -142,6 +144,19 @@ int test_ctl_on_connect(const tipc_port* port,
     return NO_ERROR;
 }
 
+static int call_istats_setter(struct tipc_work_todo* todo) {
+    assert(consumer_ctx.shm_ptr);
+
+    TLOGD("interacting with producer\n");
+    consumer_ctx.istats_setter->setInterface(consumer_ctx.stats_consumer);
+
+    tipc_queue_work_delayed_rel(consumer_ctx.hset, todo,
+                                MS_TO_NS(TIME_OUT_INTERVAL_MS));
+
+    TLOGD("will call istats setter after waiting for TIME_OUT_INTERVAL_MS\n");
+    return NO_ERROR;
+}
+
 /**
  * test_ctl_on_message() - test_ctl on_message allows the consumer
  * to receive the shared memory region to which received vendorAtoms will
@@ -189,8 +204,13 @@ static int test_ctl_on_message(const tipc_port* port,
 
     size_t page_size = PAGE_SIZE;  // getauxval(AT_PAGESZ);
     switch (request.cmd) {
-    case CONSUMER_CTL_SHM_SHARE:
-        assert(!ctx->shm_ptr);
+    case CONSUMER_CTL_SHM_SHARE: {
+        if (ctx->shm_ptr) {
+            TLOGE("SHM_SHARE received while shm_ptr is not null\n");
+            close(shm_handle);
+            return ERR_BAD_STATE;
+        }
+
         ctx->shm_ptr =
                 mmap(0, page_size, PROT_READ | PROT_WRITE, 0, shm_handle, 0);
         if (ctx->shm_ptr == MAP_FAILED) {
@@ -199,9 +219,16 @@ static int test_ctl_on_message(const tipc_port* port,
             TLOGE("Failed to mmap handle (rc=%d)\n", rc);
             return ERR_NO_MEMORY;
         }
+        ctx->recurring_work = TIPC_WORK_TODO_INITIAL_VALUE(ctx->recurring_work,
+                                                           call_istats_setter);
+        tipc_queue_work(ctx->hset, &ctx->recurring_work);
         break;
+    }
     case CONSUMER_CTL_SHM_RECLAIM:
         if (ctx->shm_ptr) {
+            TLOGD("reclaiming shm; stop scheduling calls to istats setter\n");
+            tipc_cancel_work(&ctx->recurring_work);
+
             int rc = munmap((void*)ctx->shm_ptr, page_size);
             if (rc != NO_ERROR) {
                 TLOGW("munmap() failed: %d\n", rc);
@@ -300,6 +327,7 @@ int main(void) {
         TLOGE("Failed to create handle set (%d)\n", PTR_ERR(hset));
         return EXIT_FAILURE;
     }
+    consumer_ctx.hset = hset;
 
     const auto port_acl = android::RpcServerTrusty::PortAcl{
             .flags = IPC_PORT_ALLOW_TA_CONNECT,
@@ -313,23 +341,7 @@ int main(void) {
         return rc;
     }
 
-    uint32_t timeout = INFINITE_TIME;
-    do {
-        // Changing timeout interval from infinite to simulate a timer
-        rc = tipc_handle_event(hset, timeout);
-        if (consumer_ctx.shm_ptr) {
-            TLOGD("interacting with producer\n");
-            consumer_ctx.istats_setter->setInterface(
-                    consumer_ctx.stats_consumer);
-            timeout = TIME_OUT_INTERVAL_MS;
-            TLOGD("timeout = TIME_OUT_INTERVAL_MS\n");
-        } else {
-            timeout = INFINITE_TIME;
-            TLOGD("timeout = INFINITE_TIME\n");
-        }
-    } while (rc == 0 || timeout == TIME_OUT_INTERVAL_MS);
-
+    rc = tipc_run_event_loop(hset);
     TLOGE("stats-consumer service died\n");
-
     return rc;
 }
