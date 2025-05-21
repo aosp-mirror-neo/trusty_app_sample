@@ -36,7 +36,8 @@ use binder::binder_impl::Binder;
 use ciborium::Value;
 use core::fmt;
 use coset::{AsCborValue, CborSerializable, CoseError};
-use hwcryptohalplatform::{AesImpl, HmacImpl};
+use hwcryptohalinterfaces::DeviceTime;
+use hwcryptohalplatform::{AesImpl, DeviceTimeImpl, HmacImpl, RngImpl};
 use hwcryptohal_common::{
     aidl_enum_wrapper, cose_enum_gen,
     err::HwCryptoError,
@@ -56,7 +57,6 @@ use std::sync::{Mutex, OnceLock};
 use crate::helpers;
 use crate::hwcrypto_device_key::HwCryptoKey;
 use crate::service_encryption_key::{EncryptedContent, EncryptionHeader, EncryptionHeaderKey};
-use crate::{crypto_provider, platform_functions};
 
 /// Number of bytes of unique value used to check if a key was created on current HWCrypto boot.
 const UNIQUE_VALUE_SIZEOF: usize = 32;
@@ -101,9 +101,8 @@ fn get_boot_unique_value() -> Result<BootUniqueValue, HwCryptoError> {
     // current implementation with one that can fail when trying to retrieve a random number.
     // If the RNG changes to a fallible one we could use `get_or_try_init`.
     let boot_unique_value = BOOT_UNIQUE_VALUE.get_or_init(|| {
-        let mut rng = crypto_provider::RngImpl::default();
         let mut new_boot_unique_value = BootUniqueValue([0u8; UNIQUE_VALUE_SIZEOF]);
-        rng.fill_bytes(&mut new_boot_unique_value.0[..]);
+        RngImpl.fill_bytes(&mut new_boot_unique_value.0[..]);
         new_boot_unique_value
     });
     Ok(boot_unique_value.clone())
@@ -227,7 +226,7 @@ pub(crate) struct ExpirationTime {
 
 impl ExpirationTime {
     fn new(expiration_time_sec: u64) -> Result<Self, HwCryptoError> {
-        let set_time_ms = platform_functions::current_epoch_time_ms()?;
+        let set_time_ms = DeviceTimeImpl.current_epoch_time_ms()?;
         let valid_period_ms = expiration_time_sec
             .checked_mul(1000)
             .ok_or(hwcrypto_err!(BAD_PARAMETER, "validity period is too big",))?;
@@ -235,7 +234,7 @@ impl ExpirationTime {
     }
 
     pub(crate) fn check_validity(&self) -> Result<bool, HwCryptoError> {
-        let current_time_ms = platform_functions::current_epoch_time_ms()?;
+        let current_time_ms = DeviceTimeImpl.current_epoch_time_ms()?;
         if current_time_ms < self.set_time_ms {
             return Err(hwcrypto_err!(INVALID_KEY, "current time is before expiry set time",));
         }
@@ -1411,7 +1410,6 @@ pub(crate) fn generate_key_material(
     key_type: &KeyType,
     key_random_bytes: Option<Vec<u8>>,
 ) -> Result<KeyMaterial, HwCryptoError> {
-    let mut rng = crypto_provider::RngImpl::default();
     match *key_type {
         KeyType::AES_128_CBC_NO_PADDING
         | KeyType::AES_128_CBC_PKCS7_PADDING
@@ -1446,7 +1444,7 @@ pub(crate) fn generate_key_material(
                     )),
                 }
             } else {
-                Ok(AesImpl.generate_key(&mut rng, variant, &[])?)
+                Ok(AesImpl.generate_key(&mut RngImpl, variant, &[])?)
             }
         }
         KeyType::HMAC_SHA256 | KeyType::HMAC_SHA512 => {
@@ -1464,7 +1462,7 @@ pub(crate) fn generate_key_material(
                 }
             } else {
                 Ok(HmacImpl.generate_key(
-                    &mut rng,
+                    &mut RngImpl,
                     kmr_wire::KeySizeInBits((key_size_bytes * 8).try_into().map_err(|_| {
                         hwcrypto_err!(
                             GENERIC_ERROR,

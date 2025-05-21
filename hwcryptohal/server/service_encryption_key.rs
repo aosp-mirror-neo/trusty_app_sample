@@ -21,13 +21,11 @@ use ciborium::Value;
 use coset::{AsCborValue, CborSerializable, Header, ProtectedHeader};
 use hwcryptohal_common::{err::HwCryptoError, hwcrypto_err};
 use hwcryptohalinterfaces::DeviceKeys;
-use hwcryptohalplatform::{AesImpl, DeviceKeysImpl, HmacImpl};
+use hwcryptohalplatform::{AesImpl, DeviceKeysImpl, HmacImpl, RngImpl};
 use kmr_common::{
     crypto::{self, Aes, Hkdf, Rng},
     FallibleAllocExt,
 };
-
-use crate::crypto_provider;
 
 /// Size of the base encryption key used by the service to derive other versioned context encryption
 /// keys
@@ -346,9 +344,8 @@ fn derive_key_hkdf(
 }
 
 fn get_new_key_derivation_context() -> [u8; KEY_DERIVATION_CTX_LENGTH] {
-    let mut rng = crypto_provider::RngImpl::default();
     let mut key_ctx = [0u8; KEY_DERIVATION_CTX_LENGTH];
-    rng.fill_bytes(&mut key_ctx[..]);
+    RngImpl.fill_bytes(&mut key_ctx[..]);
     key_ctx
 }
 

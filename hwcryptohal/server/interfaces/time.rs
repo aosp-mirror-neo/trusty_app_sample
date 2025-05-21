@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2024 The Android Open Source Project
+ * Copyright (C) 2025 The Android Open Source Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,6 +14,13 @@
  * limitations under the License.
  */
 
-//! Module providing access to the cryptographic implementations used by the library.
+//! Module providing trait definition to access device time functionality.
 
-pub(crate) use crate::platform_functions::PlatformRng as RngImpl;
+use hwcryptohal_common::err::HwCryptoError;
+
+/// Abstraction of device specific time functionality
+pub trait DeviceTime {
+    /// Returns time in ms from a platform defined epoch. The time must not go back in time for a
+    /// given boot.
+    fn current_epoch_time_ms(&self) -> Result<u64, HwCryptoError>;
+}

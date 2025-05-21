@@ -45,11 +45,6 @@ MODULE_LIBRARY_DEPS += \
 	trusty/user/base/lib/trusty-std \
 	$(call FIND_CRATE,vm-memory) \
 
-MODULE_BINDGEN_ALLOW_FUNCTIONS := \
-	trusty_rng_.* \
-
-MODULE_BINDGEN_SRC_HEADER := $(LOCAL_DIR)/bindings.h
-
 MODULE_RUST_TESTS := true
 
 include make/library.mk

@@ -37,4 +37,9 @@ MODULE_LIBRARY_DEPS += \
 	trusty/user/base/lib/trusty-log \
 	trusty/user/base/lib/trusty-std \
 
+MODULE_BINDGEN_ALLOW_FUNCTIONS := \
+	trusty_rng_.* \
+
+MODULE_BINDGEN_SRC_HEADER := $(LOCAL_DIR)/bindings.h
+
 include make/library.mk
