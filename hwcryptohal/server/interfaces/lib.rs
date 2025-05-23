@@ -18,10 +18,12 @@
 mod client_identification;
 mod device_keys;
 mod memory_access;
+mod test;
 mod time;
 
 pub use client_identification::ClientIdentification;
 pub use client_identification::ClientPolicyCheck;
 pub use device_keys::{DeviceKeys, KeymintHmacKey};
 pub use memory_access::MemoryMappedObject;
+pub use test::{ClientIdentity, TestAllocatedPage, TestHelpers};
 pub use time::DeviceTime;

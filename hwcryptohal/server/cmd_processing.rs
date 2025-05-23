@@ -757,116 +757,11 @@ mod tests {
         OperationParameters::OperationParameters,
         PatternParameters::PatternParameters,
     };
-    use binder::ParcelFileDescriptor;
-    use core::ffi::c_void;
-    use std::alloc::{alloc_zeroed, dealloc, Layout};
-    use std::os::fd::{FromRawFd, OwnedFd};
-    use test::{expect, expect_eq};
+    use hwcryptohalinterfaces::{TestAllocatedPage, TestHelpers};
+    use hwcryptohalplatform::TestHelpersImpl;
+    use test::{assert_ok, expect, expect_eq};
 
     use crate::tests::connection_info;
-
-    const OUTPUT_MEMORY_BUFFER_FLAGS: u32 =
-        trusty_sys::MMAP_FLAG_PROT_READ | trusty_sys::MMAP_FLAG_PROT_WRITE;
-
-    /// Structure only intended to use on unit tests. It will allocate a single memory page and
-    /// create a memref to it.
-    struct TestPageAllocator {
-        allocated_buffer: *mut u8,
-        layout: Layout,
-        raw_trusty_fd: i64,
-        parcel_file_descriptor_created: bool,
-    }
-
-    impl TestPageAllocator {
-        fn new() -> Result<Self, HwCryptoError> {
-            let page_size = Self::get_allocation_size();
-            if page_size == 0 {
-                return Err(hwcrypto_err!(ALLOCATION_ERROR, "received zero as the page size"));
-            }
-            let layout = Layout::from_size_align(page_size, page_size).map_err(|e| {
-                hwcrypto_err!(
-                    GENERIC_ERROR,
-                    "layout creation error, should not have happened: {:?}",
-                    e
-                )
-            })?;
-            // SAFETY: Layout is non-zero
-            let allocated_buffer = unsafe {
-                let ptr = alloc_zeroed(layout);
-                ptr
-            };
-            // Always mapping things as output to change the buffer values for tests
-            let prot_flags = OUTPUT_MEMORY_BUFFER_FLAGS;
-            // SAFETY: address and size are correct because they came from the allocation.
-            let raw_trusty_fd = unsafe {
-                trusty_sys::memref_create(
-                    allocated_buffer as *mut c_void,
-                    page_size as u32,
-                    prot_flags,
-                )
-            };
-            if raw_trusty_fd < 0 {
-                return Err(hwcrypto_err!(ALLOCATION_ERROR, "memref creation failed"));
-            }
-            let parcel_file_descriptor_created = false;
-            Ok(Self {
-                allocated_buffer,
-                layout,
-                raw_trusty_fd: raw_trusty_fd.into(),
-                parcel_file_descriptor_created,
-            })
-        }
-
-        fn get_parcel_file_descriptor(&mut self) -> Result<ParcelFileDescriptor, HwCryptoError> {
-            if self.parcel_file_descriptor_created {
-                return Err(hwcrypto_err!(
-                    GENERIC_ERROR,
-                    "only a single parcel file descriptor can be created"
-                ));
-            }
-            // fd is valid if the object has been created and we can take ownership of it.
-            self.parcel_file_descriptor_created = true;
-            let fd = unsafe { OwnedFd::from_raw_fd(self.raw_trusty_fd as i32) };
-            Ok(ParcelFileDescriptor::new(fd))
-        }
-
-        fn get_allocation_size() -> usize {
-            // SAFETY: FFI call with all safe arguments.
-            let page_size = unsafe { libc::getauxval(libc::AT_PAGESZ) };
-            page_size as usize
-        }
-
-        fn copy_values(&mut self, start: usize, values: &[u8]) -> Result<(), HwCryptoError> {
-            if self.parcel_file_descriptor_created {
-                // There is already another reference to this memory area, don't allow to change it
-                // anymore through this method
-                return Err(hwcrypto_err!(GENERIC_ERROR, "copy_values is meant for initialization before creating any other references to this memory area"));
-            }
-            if start + values.len() > Self::get_allocation_size() {
-                return Err(hwcrypto_err!(BAD_PARAMETER, "input won't fit in buffer"));
-            }
-            // SAFETY: - value is valid for all the range that is read
-            //         - allocated_buffer[start, start + values.len()] is a valid area to write
-            //         - allocated_buffer and values are properly aligned because they are `u8`
-            //         - both areas do not overlap because allocated_buffer is a newly allocated
-            //           buffer and we do not have methods to get references to this area until
-            //           after this method is no longer valid.
-            unsafe {
-                self.allocated_buffer
-                    .wrapping_add(start)
-                    .copy_from_nonoverlapping(values.as_ptr(), values.len());
-            }
-            Ok(())
-        }
-    }
-
-    impl Drop for TestPageAllocator {
-        fn drop(&mut self) {
-            // SAFETY: `allocated_buffer` is valid and have been allocated by the same allocator.
-            //         layout was stored at allocation time, so it matches.
-            unsafe { dealloc(self.allocated_buffer, self.layout) };
-        }
-    }
 
     fn read_slice(
         memory_buffer: &mut MemoryBuffer,
@@ -888,14 +783,17 @@ mod tests {
 
     #[test]
     fn create_memory_buffer() {
-        let mut output_page = TestPageAllocator::new().expect("couldn't allocate test page");
-        output_page.copy_values(0, &[1, 2, 3, 4, 5, 6, 7, 8, 9]).unwrap();
+        let mut output_page = assert_ok!(
+            TestHelpersImpl::allocate_test_page(Some(&[1, 2, 3, 4, 5, 6, 7, 8, 9])),
+            "couldn't allocate test page"
+        );
 
-        let total_buffer_size = TestPageAllocator::get_allocation_size();
+        let total_buffer_size = output_page.allocation_size();
         let mem_buffer_parameters = MemoryBufferParameter {
-            bufferHandle: MemoryBufferAidl::Output(Some(
-                output_page.get_parcel_file_descriptor().expect("couldn't create fd"),
-            )),
+            bufferHandle: MemoryBufferAidl::Output(Some(unsafe {
+                // SAFETY: output_page is not dropped before `mem_buffer_parameters`
+                output_page.get_parcel_file_descriptor().expect("couldn't create fd")
+            })),
             sizeBytes: total_buffer_size as i32,
         };
         let mut memory_buffer =
@@ -931,12 +829,14 @@ mod tests {
 
     #[test]
     fn create_output_data_references() {
-        let mut output_page = TestPageAllocator::new().expect("couldn't allocate test page");
-        let total_buffer_size = TestPageAllocator::get_allocation_size();
+        let mut output_page =
+            assert_ok!(TestHelpersImpl::allocate_test_page(None), "couldn't allocate test page");
+        let total_buffer_size = output_page.allocation_size();
         let mem_buffer_parameters = MemoryBufferParameter {
-            bufferHandle: MemoryBufferAidl::Output(Some(
-                output_page.get_parcel_file_descriptor().expect("couldn't create fd"),
-            )),
+            bufferHandle: MemoryBufferAidl::Output(Some(unsafe {
+                // SAFETY: output_page is not dropped before `mem_buffer_parameters`
+                output_page.get_parcel_file_descriptor().expect("couldn't create fd")
+            })),
             sizeBytes: total_buffer_size as i32,
         };
 
@@ -1119,12 +1019,14 @@ mod tests {
 
     #[test]
     fn check_output_step_length() {
-        let alloc_size = TestPageAllocator::get_allocation_size();
-        let mut output_page = TestPageAllocator::new().expect("couldn't create test page");
+        let mut output_page =
+            assert_ok!(TestHelpersImpl::allocate_test_page(None), "couldn't allocate test page");
+        let alloc_size = output_page.allocation_size();
         let output_memory_buffer = MemoryBufferParameter {
-            bufferHandle: MemoryBufferAidl::Output(Some(
-                output_page.get_parcel_file_descriptor().expect("couldn't get fd"),
-            )),
+            bufferHandle: MemoryBufferAidl::Output(Some(unsafe {
+                // SAFETY: output_page is not dropped before `output_memory_buffer`
+                output_page.get_parcel_file_descriptor().expect("couldn't create fd")
+            })),
             sizeBytes: alloc_size as i32,
         };
         let mut cmd_list = Vec::<CryptoOperation>::new();
@@ -1164,19 +1066,23 @@ mod tests {
 
     #[test]
     fn output_step_out_range() {
-        let alloc_size = TestPageAllocator::get_allocation_size();
-        let mut output_page = TestPageAllocator::new().expect("couldn't get test page");
+        let mut output_page =
+            assert_ok!(TestHelpersImpl::allocate_test_page(None), "couldn't allocate test page");
+        let alloc_size = output_page.allocation_size();
         let output_memory_buffer = MemoryBufferParameter {
-            bufferHandle: MemoryBufferAidl::Output(Some(
-                output_page.get_parcel_file_descriptor().expect("couldn't get fd"),
-            )),
+            bufferHandle: MemoryBufferAidl::Output(Some(unsafe {
+                // SAFETY: output_page is not dropped before `output_memory_buffer`
+                output_page.get_parcel_file_descriptor().expect("couldn't create fd")
+            })),
             sizeBytes: alloc_size as i32,
         };
-        let mut input_page = TestPageAllocator::new().expect("couldn't get test page");
+        let mut input_page =
+            assert_ok!(TestHelpersImpl::allocate_test_page(None), "couldn't allocate test page");
         let input_memory_buffer = MemoryBufferParameter {
-            bufferHandle: MemoryBufferAidl::Input(Some(
-                input_page.get_parcel_file_descriptor().expect("couldn't get fd"),
-            )),
+            bufferHandle: MemoryBufferAidl::Input(Some(unsafe {
+                // SAFETY: output_page is not dropped before `input_memory_buffer`
+                input_page.get_parcel_file_descriptor().expect("couldn't get fd")
+            })),
             sizeBytes: alloc_size as i32,
         };
         let mut cmd_list = Vec::<CryptoOperation>::new();
@@ -1212,20 +1118,25 @@ mod tests {
 
     #[test]
     fn memory_reference_copy_operation_on_initial_state() {
-        let alloc_size = TestPageAllocator::get_allocation_size();
-        let mut output_page = TestPageAllocator::new().expect("couldn't get test page");
+        let mut output_page =
+            assert_ok!(TestHelpersImpl::allocate_test_page(None), "couldn't allocate test page");
+        let alloc_size = output_page.allocation_size();
         let output_memory_buffer = MemoryBufferParameter {
-            bufferHandle: MemoryBufferAidl::Output(Some(
-                output_page.get_parcel_file_descriptor().expect("couldn't get fd"),
-            )),
+            bufferHandle: MemoryBufferAidl::Output(Some(unsafe {
+                // SAFETY: output_page is not dropped before `output_memory_buffer`
+                output_page.get_parcel_file_descriptor().expect("couldn't create fd")
+            })),
             sizeBytes: alloc_size as i32,
         };
-        let mut input_page = TestPageAllocator::new().expect("couldn't get test page");
-        input_page.copy_values(0, &[7, 8, 9]).unwrap();
+        let mut input_page = assert_ok!(
+            TestHelpersImpl::allocate_test_page(Some(&[7, 8, 9])),
+            "couldn't allocate test page"
+        );
         let input_memory_buffer = MemoryBufferParameter {
-            bufferHandle: MemoryBufferAidl::Input(Some(
-                input_page.get_parcel_file_descriptor().expect("couldn't get fd"),
-            )),
+            bufferHandle: MemoryBufferAidl::Input(Some(unsafe {
+                // SAFETY: output_page is not dropped before `input_memory_buffer`
+                input_page.get_parcel_file_descriptor().expect("couldn't get fd")
+            })),
             sizeBytes: alloc_size as i32,
         };
         let mut cmd_list = Vec::<CryptoOperation>::new();
@@ -1293,13 +1204,17 @@ mod tests {
         let mut cmd_processor = CmdProcessorContext::new();
         let data_output = OperationData::DataBuffer(Vec::new());
         cmd_list.push(CryptoOperation::DataOutput(data_output));
-        let mut input_page = TestPageAllocator::new().expect("couldn't create test page");
-        input_page.copy_values(0, &[2, 4, 8, 3, 6, 9]).unwrap();
+        let mut input_page = assert_ok!(
+            TestHelpersImpl::allocate_test_page(Some(&[2, 4, 8, 3, 6, 9])),
+            "couldn't allocate test page"
+        );
+        let allocation_size = input_page.allocation_size();
         let input_memory_buffer = MemoryBufferParameter {
-            bufferHandle: MemoryBufferAidl::Input(Some(
-                input_page.get_parcel_file_descriptor().expect("couldn't create fd"),
-            )),
-            sizeBytes: TestPageAllocator::get_allocation_size() as i32,
+            bufferHandle: MemoryBufferAidl::Input(Some(unsafe {
+                // SAFETY: output_page is not dropped before `input_memory_buffer`
+                input_page.get_parcel_file_descriptor().expect("couldn't get fd")
+            })),
+            sizeBytes: allocation_size as i32,
         };
         cmd_list.push(CryptoOperation::SetMemoryBuffer(input_memory_buffer));
         let input_reference = MemoryBufferReference { startOffset: 0, sizeBytes: 3 as i32 };
@@ -1410,24 +1325,29 @@ mod tests {
 
     #[test]
     fn copy_slice() {
-        let mut output_page = TestPageAllocator::new().expect("couldn't allocate test page");
-        let mut output_page_2 = TestPageAllocator::new().expect("couldn't allocate test page");
-        output_page_2.copy_values(0, &[20, 21, 22, 23, 24, 25, 26, 27, 28, 29]).unwrap();
+        let mut output_page =
+            assert_ok!(TestHelpersImpl::allocate_test_page(None), "couldn't allocate test page");
+        let mut output_page_2 = assert_ok!(
+            TestHelpersImpl::allocate_test_page(Some(&[20, 21, 22, 23, 24, 25, 26, 27, 28, 29])),
+            "couldn't allocate test page"
+        );
 
-        let total_buffer_size = TestPageAllocator::get_allocation_size();
+        let total_buffer_size = output_page.allocation_size();
         let mem_buffer_parameters = MemoryBufferParameter {
-            bufferHandle: MemoryBufferAidl::Output(Some(
-                output_page.get_parcel_file_descriptor().expect("couldn't create fd"),
-            )),
+            bufferHandle: MemoryBufferAidl::Output(Some(unsafe {
+                // SAFETY: output_page is not dropped before `mem_buffer_parameters`
+                output_page.get_parcel_file_descriptor().expect("couldn't create fd")
+            })),
             sizeBytes: total_buffer_size as i32,
         };
         let mut memory_buffer =
             MemoryBuffer::new(&mem_buffer_parameters).expect("Couldn't createa memory buffer");
 
         let mem_buffer_parameters = MemoryBufferParameter {
-            bufferHandle: MemoryBufferAidl::Output(Some(
-                output_page_2.get_parcel_file_descriptor().expect("couldn't create fd"),
-            )),
+            bufferHandle: MemoryBufferAidl::Output(Some(unsafe {
+                // SAFETY: output_page is not dropped before `mem_buffer_parameters`
+                output_page_2.get_parcel_file_descriptor().expect("couldn't create fd")
+            })),
             sizeBytes: total_buffer_size as i32,
         };
         let mut memory_buffer_2 =
@@ -1564,24 +1484,29 @@ mod tests {
 
     #[test]
     fn data_to_process_memory_reference_copies() {
-        let mut output_page = TestPageAllocator::new().expect("couldn't allocate test page");
-        let mut output_page_2 = TestPageAllocator::new().expect("couldn't allocate test page");
-        output_page_2.copy_values(0, &[20, 21, 22, 23, 24, 25, 26, 27, 28, 29]).unwrap();
+        let mut output_page =
+            assert_ok!(TestHelpersImpl::allocate_test_page(None), "couldn't allocate test page");
+        let mut output_page_2 = assert_ok!(
+            TestHelpersImpl::allocate_test_page(Some(&[20, 21, 22, 23, 24, 25, 26, 27, 28, 29])),
+            "couldn't allocate test page"
+        );
 
-        let total_buffer_size = TestPageAllocator::get_allocation_size();
+        let total_buffer_size = output_page.allocation_size();
         let mem_buffer_parameters = MemoryBufferParameter {
-            bufferHandle: MemoryBufferAidl::Output(Some(
-                output_page.get_parcel_file_descriptor().expect("couldn't create fd"),
-            )),
+            bufferHandle: MemoryBufferAidl::Output(Some(unsafe {
+                // SAFETY: output_page is not dropped before `mem_buffer_parameters`
+                output_page.get_parcel_file_descriptor().expect("couldn't create fd")
+            })),
             sizeBytes: total_buffer_size as i32,
         };
         let mut memory_buffer =
             MemoryBuffer::new(&mem_buffer_parameters).expect("Couldn't createa memory buffer");
 
         let mem_buffer_parameters = MemoryBufferParameter {
-            bufferHandle: MemoryBufferAidl::Output(Some(
-                output_page_2.get_parcel_file_descriptor().expect("couldn't create fd"),
-            )),
+            bufferHandle: MemoryBufferAidl::Output(Some(unsafe {
+                // SAFETY: output_page is not dropped before `mem_buffer_parameters`
+                output_page_2.get_parcel_file_descriptor().expect("couldn't create fd")
+            })),
             sizeBytes: total_buffer_size as i32,
         };
         let mut memory_buffer_2 =

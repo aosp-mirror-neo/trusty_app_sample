@@ -50,15 +50,19 @@ assert_impl_all!(RngImpl: Rng);
 
 #[cfg(test)]
 mod tests {
+    use hwcryptohalinterfaces::{ClientIdentity, TestHelpers};
+    use hwcryptohalplatform::TestHelpersImpl;
+    use static_assertions::assert_impl_all;
+
+    assert_impl_all!(TestHelpersImpl: TestHelpers);
+
     test::init!();
 
     pub(crate) fn connection_info() -> Vec<u8> {
-        // TODO: This is a temporary mock function for testing until we move to use DICE policies.
-        "f41a7796-975a-4279-8cc4-b73f8820430d".as_bytes().to_vec()
+        TestHelpersImpl::mock_client_id(ClientIdentity::Identity1)
     }
 
-    pub(crate) fn unauthorized_connection_info() -> Vec<u8> {
-        // TODO: This is a temporary mock function for testing until we move to use DICE policies.
-        "00000000-0000-0000-0000-000000000000".as_bytes().to_vec()
+    pub(crate) fn connection_info_second_identity() -> Vec<u8> {
+        TestHelpersImpl::mock_client_id(ClientIdentity::Identity2)
     }
 }

@@ -38,11 +38,9 @@ MODULE_LIBRARY_DEPS += \
 	trusty/user/base/lib/keymint-rust/common \
 	trusty/user/base/lib/openssl-rust \
 	trusty/user/base/lib/tipc/rust \
-	trusty/user/base/lib/trusty-sys \
 	$(call FIND_CRATE,log) \
 	$(call FIND_CRATE,static_assertions) \
 	trusty/user/base/lib/trusty-log \
-	trusty/user/base/lib/trusty-std \
 	$(call FIND_CRATE,vm-memory) \
 
 MODULE_RUST_TESTS := true

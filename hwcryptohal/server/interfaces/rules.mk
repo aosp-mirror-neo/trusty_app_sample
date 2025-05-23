@@ -25,6 +25,7 @@ MODULE_SRCS += \
 MODULE_CRATE_NAME := hwcryptohalinterfaces
 
 MODULE_LIBRARY_DEPS += \
+	frameworks/native/libs/binder/trusty/rust \
 	trusty/user/app/sample/hwcryptohal/aidl/rust  \
 	trusty/user/app/sample/hwcryptohal/common  \
 	$(call FIND_CRATE,vm-memory) \
