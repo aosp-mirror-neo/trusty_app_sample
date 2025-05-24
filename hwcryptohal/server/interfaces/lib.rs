@@ -17,7 +17,9 @@
 //! Module providing trait definitions
 mod client_identification;
 mod device_keys;
+mod time;
 
 pub use client_identification::ClientIdentification;
 pub use client_identification::ClientPolicyCheck;
 pub use device_keys::{DeviceKeys, KeymintHmacKey};
+pub use time::DeviceTime;

@@ -21,13 +21,11 @@ use ciborium::Value;
 use coset::{AsCborValue, CborSerializable, Header, ProtectedHeader};
 use hwcryptohal_common::{err::HwCryptoError, hwcrypto_err};
 use hwcryptohalinterfaces::DeviceKeys;
-use hwcryptohalplatform::DeviceKeysImpl;
+use hwcryptohalplatform::{AesImpl, DeviceKeysImpl, HmacImpl, RngImpl};
 use kmr_common::{
     crypto::{self, Aes, Hkdf, Rng},
     FallibleAllocExt,
 };
-
-use crate::crypto_provider;
 
 /// Size of the base encryption key used by the service to derive other versioned context encryption
 /// keys
@@ -174,14 +172,13 @@ impl EncryptionHeader {
         content: T,
     ) -> Result<Vec<u8>, HwCryptoError> {
         let kek = self.derive_service_encryption_key(key_context)?;
-        let aes = crypto_provider::AesImpl;
         let cose_encrypt = coset::CoseEncrypt0Builder::new()
             .protected(self.try_into()?)
             .try_create_ciphertext::<_, HwCryptoError>(
                 &content.to_cbor_value()?.to_vec()?,
                 &[],
                 move |pt, aad| {
-                    let mut op = aes.begin_aead(
+                    let mut op = AesImpl.begin_aead(
                         kek.into(),
                         crypto::aes::GcmMode::GcmTag16 { nonce: ZERO_NONCE },
                         crypto::SymmetricOperation::Encrypt,
@@ -215,8 +212,7 @@ impl EncryptionHeader {
             ));
         }
 
-        let aes = crypto_provider::AesImpl;
-        let mut op = aes.begin_aead(
+        let mut op = AesImpl.begin_aead(
             kek.into(),
             crypto::aes::GcmMode::GcmTag16 { nonce: ZERO_NONCE },
             crypto::SymmetricOperation::Decrypt,
@@ -344,14 +340,12 @@ fn derive_key_hkdf(
     derivation_key: &[u8],
     derivation_context: &[u8],
 ) -> Result<Vec<u8>, HwCryptoError> {
-    let kdf = crypto_provider::HmacImpl;
-    Ok(kdf.hkdf(&[], &derivation_key, &derivation_context, SERVICE_KEK_LENGTH)?)
+    Ok(HmacImpl.hkdf(&[], &derivation_key, &derivation_context, SERVICE_KEK_LENGTH)?)
 }
 
 fn get_new_key_derivation_context() -> [u8; KEY_DERIVATION_CTX_LENGTH] {
-    let mut rng = crypto_provider::RngImpl::default();
     let mut key_ctx = [0u8; KEY_DERIVATION_CTX_LENGTH];
-    rng.fill_bytes(&mut key_ctx[..]);
+    RngImpl.fill_bytes(&mut key_ctx[..]);
     key_ctx
 }
 

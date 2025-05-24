@@ -24,14 +24,17 @@ use android_hardware_security_see_hwcrypto::aidl::android::hardware::security::s
     OperationParameters::OperationParameters, PatternParameters::PatternParameters,
 };
 use hwcryptohal_common::{err::HwCryptoError, hwcrypto_err};
+use hwcryptohalplatform::{AesImpl, HmacImpl};
 use kmr_common::crypto::{
     self, Aes, Hmac, KeyMaterial, SymmetricOperation as CryptoSymmetricOperation,
 };
 
 use crate::cmd_processing::DataToProcess;
-use crate::crypto_provider;
 use crate::helpers;
 use crate::opaque_key::OpaqueKey;
+
+// We only support SHA256 and SHA512
+const HMAC_MAX_SIZE: usize = 64;
 
 // Pattern for cbcs operations. cbcs is based on partially encryption using AES-CBC as defined in
 // IEC 23001-7:2016
@@ -242,9 +245,8 @@ impl HmacOperation {
             .try_into()?;
         Self::check_parameters(&opaque_key, parameters)?;
         let digest = helpers::aidl_to_rust_digest(&opaque_key.get_key_type())?;
-        let hmac = crypto_provider::HmacImpl;
         let accumulating_op = match opaque_key.key_material {
-            KeyMaterial::Hmac(ref key) => hmac.begin(key.clone(), digest).map_err(|e| {
+            KeyMaterial::Hmac(ref key) => HmacImpl.begin(key.clone(), digest).map_err(|e| {
                 hwcrypto_err!(GENERIC_ERROR, "couldn't begin hmac operation: {:?}", e)
             }),
             _ => Err(hwcrypto_err!(BAD_PARAMETER, "Invalid key type for HMAC operation")),
@@ -273,7 +275,7 @@ impl IBaseCryptoOperation for HmacOperation {
     }
 
     fn get_req_size_finish(&self) -> Result<usize, HwCryptoError> {
-        Ok(crypto_provider::HMAC_MAX_SIZE)
+        Ok(HMAC_MAX_SIZE)
     }
 
     fn update(
@@ -344,9 +346,8 @@ impl AesOperation {
         let dir = helpers::aidl_to_rust_symmetric_direction(dir)?;
         let emitting_op = match key_material {
             KeyMaterial::Aes(key) => {
-                let aes = crypto_provider::AesImpl;
                 let mode = helpers::aidl_to_rust_aes_cipher_params(parameters, &opaque_key)?;
-                aes.begin(key.clone(), mode, dir).map_err(|e| {
+                AesImpl.begin(key.clone(), mode, dir).map_err(|e| {
                     hwcrypto_err!(GENERIC_ERROR, "couldn't begin aes operation: {:?}", e)
                 })
             }
