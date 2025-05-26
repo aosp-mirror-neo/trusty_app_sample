@@ -14,13 +14,20 @@
 
 //! Implementation of IServiceInfoFetcher.aidl
 
-use log::trace;
+use log::{error, trace};
 use service_manager::get_supported_vintf_services;
 use vintf_service_info_aidl::aidl::android::vintf::{
     IServiceInfoFetcher::{BnServiceInfoFetcher, IServiceInfoFetcher},
     ServiceInfo::ServiceInfo,
 };
-use vintf_service_info_aidl::binder;
+use vintf_service_info_aidl::binder::{
+    self,
+    binder_impl::{Deserialize, IBinderInternal, TransactionCode, LAST_CALL_TRANSACTION},
+    SpIBinder,
+};
+
+const INTERFACE_HASH_TRANSACTION: TransactionCode = LAST_CALL_TRANSACTION - 1;
+const INTERFACE_VERSION_TRANSACTION: TransactionCode = LAST_CALL_TRANSACTION;
 
 pub struct ServiceInfoFetcher;
 
@@ -69,16 +76,30 @@ impl IServiceInfoFetcher for ServiceInfoFetcher {
                 Some("service name does not match descriptor"),
             ));
         }
-        // TODO(b/150155678): Get hash and version from binder
+        let hash = transact(&service_binder, INTERFACE_HASH_TRANSACTION)?;
+        let version = transact(&service_binder, INTERFACE_VERSION_TRANSACTION)?;
         let service_info = ServiceInfo {
             r#type: descriptor,
             instance: name[1].to_string(),
-            version: 1,
+            version,
             requireVintfDeclaration: true,
-            hash: "".to_string(),
+            hash,
             exe: "".to_string(),
             extensions: vec![],
         };
         Ok(service_info)
+    }
+}
+
+fn transact<D: Deserialize>(b: &SpIBinder, transaction_code: TransactionCode) -> binder::Result<D> {
+    let data = b.prepare_transact()?;
+    let parcel = b.submit_transact(transaction_code, data, 0)?;
+    let status: binder::Status =
+        parcel.read().inspect_err(|e| error!("failed to read binder status: {e:?}"))?;
+    if status.is_ok() {
+        Ok(parcel.read().inspect_err(|e| error!("failed to read parcel: {e:?}"))?)
+    } else {
+        error!("failed to get parcel: {status:?}");
+        Err(status)
     }
 }
