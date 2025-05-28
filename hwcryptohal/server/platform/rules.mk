@@ -25,6 +25,7 @@ MODULE_SRCS += \
 MODULE_CRATE_NAME := hwcryptohalplatform
 
 MODULE_LIBRARY_DEPS += \
+	frameworks/native/libs/binder/trusty/rust \
 	trusty/user/app/sample/hwcryptohal/aidl/rust  \
 	trusty/user/app/sample/hwcryptohal/common  \
 	trusty/user/app/sample/hwcryptohal/server/interfaces \
@@ -33,9 +34,11 @@ MODULE_LIBRARY_DEPS += \
 	trusty/user/base/lib/keymint-rust/common \
 	trusty/user/base/lib/openssl-rust \
 	trusty/user/base/lib/tipc/rust \
+	trusty/user/base/lib/trusty-sys \
 	$(call FIND_CRATE,log) \
 	trusty/user/base/lib/trusty-log \
 	trusty/user/base/lib/trusty-std \
+	$(call FIND_CRATE,vm-memory) \
 
 MODULE_BINDGEN_ALLOW_FUNCTIONS := \
 	trusty_rng_.* \

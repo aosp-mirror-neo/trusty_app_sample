@@ -27,16 +27,12 @@ use android_hardware_security_see_hwcrypto::aidl::android::hardware::security::s
     OperationParameters::OperationParameters,
     PatternParameters::PatternParameters,
 };
-use core::ffi::c_void;
 use hwcryptohal_common::{err::HwCryptoError, hwcrypto_err};
-use std::{os::fd::AsRawFd, ptr::NonNull};
+use hwcryptohalinterfaces::MemoryMappedObject;
+use hwcryptohalplatform::MemoryMappedObjectImpl;
 use vm_memory::{volatile_memory::VolatileSlice, Bytes, VolatileMemory};
 
 use crate::crypto_operation::{CopyOperation, CryptographicOperation, ICryptographicOperation};
-
-const OUTPUT_MEMORY_BUFFER_FLAGS: u32 =
-    trusty_sys::MMAP_FLAG_PROT_READ | trusty_sys::MMAP_FLAG_PROT_WRITE;
-const INPUT_MEMORY_BUFFER_FLAGS: u32 = trusty_sys::MMAP_FLAG_PROT_READ;
 
 /// `CmdProcessorState` is a state machine with 3 states:
 ///
@@ -287,13 +283,6 @@ enum OutputData<'a> {
     MemoryReference(MemoryBufferReference, usize),
 }
 
-fn get_mmap_prot_flags(memory_buffer: &MemoryBufferAidl) -> u32 {
-    match memory_buffer {
-        MemoryBufferAidl::Input(_) => INPUT_MEMORY_BUFFER_FLAGS,
-        MemoryBufferAidl::Output(_) => OUTPUT_MEMORY_BUFFER_FLAGS,
-    }
-}
-
 // `MemoryBufferReference` types do not contain the necessary information to
 // know if it should operate on an Input or Output buffer. That information is provided by the
 // Operation which contains the `MemoryBufferReference`. This wrapper preserves that information to
@@ -349,90 +338,25 @@ fn get_limits(
     }
 }
 
-// Wrapper over pointer used to map memory buffer.
-struct MappedBuffer(NonNull<u8>);
-
-// SAFETY: `MappedBuffer` is only used to free object on drop or to create a `VolatileSlice` when
-//         we need to access the underlying memory buffer; never directly. It is safe to access and
-//         drop on a different thread. All accesses to the mmaped memory are done through the
-//         `VolatileSlice` which already has the assumption that the underlying memory is shared
-//         between different entities, so it only uses `std::ptr::{copy, read_volatile,
-//         write_volatile}` to access memory.
-unsafe impl Send for MappedBuffer {}
-
-struct MemoryBuffer {
-    buffer_ptr: MappedBuffer,
-    total_size: usize,
-}
+struct MemoryBuffer(MemoryMappedObjectImpl);
 
 impl MemoryBuffer {
     fn new(memory_buffer_parameters: &MemoryBufferParameter) -> Result<Self, HwCryptoError> {
-        if memory_buffer_parameters.sizeBytes <= 0 {
-            return Err(hwcrypto_err!(BAD_PARAMETER, "Buffer size was not greater than 0"));
-        }
-        // memory_buffer_parameters.size is positive and because it is an i32, conversion is correct
-        let buffer_size = memory_buffer_parameters.sizeBytes as u32;
-        let protection_flags = get_mmap_prot_flags(&memory_buffer_parameters.bufferHandle);
-        let buffer_handle = match &memory_buffer_parameters.bufferHandle {
-            MemoryBufferAidl::Input(handle) | MemoryBufferAidl::Output(handle) => handle,
-        };
-        let buffer_handle = buffer_handle
-            .as_ref()
-            .ok_or_else(|| hwcrypto_err!(BAD_PARAMETER, "received a null buffer handle"))?;
-        // SAFETY: mmap is left to choose the address for the allocation. It will check that the
-        //         protection flags, size and fd are correct and return a negative value if
-        //         not.
-        let buffer_ptr = unsafe {
-            trusty_sys::mmap(
-                std::ptr::null_mut(),
-                buffer_size,
-                protection_flags,
-                buffer_handle.as_ref().as_raw_fd(),
-            )
-        };
-        if trusty_sys::Error::is_ptr_err(buffer_ptr as *const c_void) {
-            return Err(hwcrypto_err!(
-                BAD_PARAMETER,
-                "mapping buffer handle failed: {}",
-                buffer_ptr
-            ));
-        }
-        // cast is correct because buffer_ptr is positive and a pointer
-        let buffer_ptr = NonNull::new(buffer_ptr as *mut u8)
-            .ok_or(hwcrypto_err!(BAD_PARAMETER, "buffer_ptr was NULL"))?;
-        // cast is correct because buffer_size is an u32
-        let total_size = buffer_size as usize;
-
-        Ok(Self { buffer_ptr: MappedBuffer(buffer_ptr), total_size })
+        let mapped_buffer = MemoryMappedObjectImpl::mmap(&memory_buffer_parameters)?;
+        Ok(Self(mapped_buffer))
     }
 
-    fn get_memory_slice<'a>(&'a mut self) -> Result<VolatileSlice<'a>, HwCryptoError> {
-        // SAFETY: Memory at address `buffer_ptr` has length `buffer_size` because if not mmap
-        //         operation would have failed. All accesses to this memory on this service are
-        //         through the VolatileSlice methods, so accesses are volatile accesses. Memory is
-        //         only unmapped on drop, so it will available for the lifetime of the
-        //         `VolatileSlice`.
-        let mem_buffer = unsafe { VolatileSlice::new(self.buffer_ptr.0.as_ptr(), self.total_size) };
-        Ok(mem_buffer)
+    fn get_memory_slice(&mut self) -> Result<VolatileSlice, HwCryptoError> {
+        self.0.get_memory_slice()
     }
 
-    fn get_subslice_as_data_to_process<'a>(
-        &'a mut self,
+    fn get_subslice_as_data_to_process(
+        &mut self,
         start: usize,
         size: usize,
-    ) -> Result<DataToProcess<'a>, HwCryptoError> {
+    ) -> Result<DataToProcess, HwCryptoError> {
         let mem_buffer = self.get_memory_slice()?;
         Ok(DataToProcess::new_from_volatile_slice(mem_buffer.subslice(start, size)?))
-    }
-}
-
-impl Drop for MemoryBuffer {
-    fn drop(&mut self) {
-        // SAFETY: `buffer_ptr` and `total_size` were set up and remain unchanged for the lifetime
-        //         of the object. `buffer_ptr` is still mapped at this point
-        unsafe {
-            trusty_sys::munmap(self.buffer_ptr.0.as_ptr().cast::<c_void>(), self.total_size as u32)
-        };
     }
 }
 
@@ -482,14 +406,14 @@ impl CmdProcessorContext {
             return Err(hwcrypto_err!(BAD_PARAMETER, "cannot create buffer references of size 0"));
         }
         if let Some(current_memory_buffer) = current_memory_buffer {
-            if buffer_start >= current_memory_buffer.total_size {
+            if buffer_start >= current_memory_buffer.0.buffer_size() {
                 return Err(hwcrypto_err!(BAD_PARAMETER, "buffer start falls outside of buffer"));
             }
             // Because both values are positive and signed, then the addition should not
             // overflow. Using a checked add in case we can change these values to unsigned
             // in the future
             if let Some(buffer_end) = buffer_size.checked_add(buffer_start) {
-                if buffer_end > current_memory_buffer.total_size {
+                if buffer_end > current_memory_buffer.0.buffer_size() {
                     Err(hwcrypto_err!(BAD_PARAMETER, "buffer reference falls outside of buffer"))
                 } else {
                     Ok(())
@@ -844,6 +768,9 @@ mod tests {
 
     use crate::tests::connection_info;
 
+    const OUTPUT_MEMORY_BUFFER_FLAGS: u32 =
+        trusty_sys::MMAP_FLAG_PROT_READ | trusty_sys::MMAP_FLAG_PROT_WRITE;
+
     /// Structure only intended to use on unit tests. It will allocate a single memory page and
     /// create a memref to it.
     struct TestPageAllocator {
@@ -945,18 +872,11 @@ mod tests {
     }
 
     fn read_slice(
-        memory_buffer: &MemoryBuffer,
+        memory_buffer: &mut MemoryBuffer,
         buf: &mut [u8],
         start: usize,
     ) -> Result<(), HwCryptoError> {
-        // SAFETY: Memory at address `buffer_ptr` has length `buffer_size` because if not mmap
-        //         operation would have failed. All accesses to this memory on this service are
-        //         through the VolatileSlice methods, so accesses are volatile accesses. Memory
-        //         is only unmapped on drop, so it will available for the lifetime of the
-        //         `VolatileSlice`.
-        let mem_buffer = unsafe {
-            VolatileSlice::new(memory_buffer.buffer_ptr.0.as_ptr(), memory_buffer.total_size)
-        };
+        let mem_buffer = memory_buffer.get_memory_slice()?;
         mem_buffer.read_slice(buf, start).map_err(HwCryptoError::from)
     }
 
@@ -986,29 +906,29 @@ mod tests {
 
         let mut slice = vec![0; 5];
 
-        read_slice(&memory_buffer, &mut slice[0..2], 1).expect("couldn't get slice");
+        read_slice(&mut memory_buffer, &mut slice[0..2], 1).expect("couldn't get slice");
         expect_eq!(&slice[0..2], &[2, 3], "wrong value retrieved through slice");
 
-        read_slice(&memory_buffer, &mut slice[0..1], 8).expect("couldn't get slice");
+        read_slice(&mut memory_buffer, &mut slice[0..1], 8).expect("couldn't get slice");
         expect_eq!(&slice[0..1], &[9], "wrong value retrieved through slice");
 
-        let result = read_slice(&memory_buffer, &mut slice[0..2], total_buffer_size - 1);
+        let result = read_slice(&mut memory_buffer, &mut slice[0..2], total_buffer_size - 1);
         expect!(result.is_err(), "Shouldn't be able to get slice with end out of range");
 
-        let result = read_slice(&memory_buffer, &mut slice[0..1], total_buffer_size);
+        let result = read_slice(&mut memory_buffer, &mut slice[0..1], total_buffer_size);
         expect!(result.is_err(), "Shouldn't be able to get slice with start out of range");
 
-        read_slice(&memory_buffer, &mut slice[0..1], 0).expect("couldn't get slice");
+        read_slice(&mut memory_buffer, &mut slice[0..1], 0).expect("couldn't get slice");
         expect_eq!(&slice[0..1], &[1], "wrong value retrieved through slice");
 
-        read_slice(&memory_buffer, &mut slice[0..3], 4).expect("couldn't get slice");
+        read_slice(&mut memory_buffer, &mut slice[0..3], 4).expect("couldn't get slice");
         expect_eq!(&slice[0..3], &[5, 6, 7], "wrong value retrieved through slice");
 
         write_slice(&mut memory_buffer, &[55], 5).expect("couldn't write slice");
-        read_slice(&memory_buffer, &mut slice[0..3], 4).expect("couldn't get slice");
+        read_slice(&mut memory_buffer, &mut slice[0..3], 4).expect("couldn't get slice");
         expect_eq!(&slice[0..3], &[5, 55, 7], "wrong value retrieved through slice");
 
-        read_slice(&memory_buffer, &mut slice[0..5], 3).expect("couldn't get slice");
+        read_slice(&mut memory_buffer, &mut slice[0..5], 3).expect("couldn't get slice");
         expect_eq!(&slice[0..5], &[4, 5, 55, 7, 8], "wrong value retrieved through slice");
     }
 
@@ -1221,9 +1141,9 @@ mod tests {
         let process_result = cmd_processor.process_all_steps(&mut cmd_list);
         expect!(process_result.is_ok(), "Couldn't process command");
         let mut read_slice_val = vec![55; 9];
-        let mem_buffer = cmd_processor.current_output_memory_buffer.as_ref().unwrap();
+        let mut mem_buffer = cmd_processor.current_output_memory_buffer.as_mut().unwrap();
         cmd_list.remove(0);
-        read_slice(&mem_buffer, &mut read_slice_val[..], 0).unwrap();
+        read_slice(&mut mem_buffer, &mut read_slice_val[..], 0).unwrap();
         expect_eq!(
             &read_slice_val[..],
             &[1, 2, 3, 0, 0, 0, 0, 0, 0],
@@ -1236,8 +1156,8 @@ mod tests {
             process_result.is_err(),
             "Command should have failed because we run out of output buffer"
         );
-        let mem_buffer = cmd_processor.current_output_memory_buffer.as_ref().unwrap();
-        read_slice(&mem_buffer, &mut read_slice_val[..], 0).unwrap();
+        let mut mem_buffer = cmd_processor.current_output_memory_buffer.as_mut().unwrap();
+        read_slice(&mut mem_buffer, &mut read_slice_val[..], 0).unwrap();
         expect_eq!(
             &read_slice_val[..],
             &[1, 2, 3, 0, 0, 0, 0, 0, 0],
@@ -1318,8 +1238,8 @@ mod tests {
         let process_result = cmd_processor.process_all_steps(&mut cmd_list);
         expect!(process_result.is_ok(), "Couldn't process command");
         let mut read_slice_val = vec![55; 9];
-        let mem_buffer = cmd_processor.current_output_memory_buffer.as_ref().unwrap();
-        read_slice(&mem_buffer, &mut read_slice_val[..], 0).unwrap();
+        let mut mem_buffer = cmd_processor.current_output_memory_buffer.as_mut().unwrap();
+        read_slice(&mut mem_buffer, &mut read_slice_val[..], 0).unwrap();
         expect_eq!(&read_slice_val[..], &[0, 0, 0, 0, 0, 0, 0, 0, 0], "initial values where not 0");
         cmd_list.remove(1);
         cmd_list.remove(0);
@@ -1331,14 +1251,14 @@ mod tests {
         cmd_list.push(CryptoOperation::CopyData(OperationData::DataBuffer(vec![1, 2, 3])));
         let process_result = cmd_processor.process_all_steps(&mut cmd_list);
         expect!(process_result.is_ok(), "Couldn't process command");
-        let mem_buffer = cmd_processor.current_output_memory_buffer.as_ref().unwrap();
-        read_slice(&mem_buffer, &mut read_slice_val[..], 0).unwrap();
+        let mut mem_buffer = cmd_processor.current_output_memory_buffer.as_mut().unwrap();
+        read_slice(&mut mem_buffer, &mut read_slice_val[..], 0).unwrap();
         expect_eq!(&read_slice_val[..], &[1, 2, 3, 0, 0, 0, 0, 0, 0], "initial values where not 0");
         cmd_list.push(CryptoOperation::CopyData(OperationData::DataBuffer(vec![4, 5, 6])));
         let process_result = cmd_processor.process_all_steps(&mut cmd_list);
         expect!(process_result.is_ok(), "Couldn't process command");
-        let mem_buffer = cmd_processor.current_output_memory_buffer.as_ref().unwrap();
-        read_slice(&mem_buffer, &mut read_slice_val[..], 0).unwrap();
+        let mut mem_buffer = cmd_processor.current_output_memory_buffer.as_mut().unwrap();
+        read_slice(&mut mem_buffer, &mut read_slice_val[..], 0).unwrap();
         expect_eq!(&read_slice_val[..], &[1, 2, 3, 4, 5, 6, 0, 0, 0], "initial values where not 0");
         let input_reference = MemoryBufferReference { startOffset: 0, sizeBytes: 3 };
         cmd_list
@@ -1346,8 +1266,8 @@ mod tests {
         let process_result = cmd_processor.process_all_steps(&mut cmd_list);
         expect!(process_result.is_ok(), "Couldn't process command");
         cmd_list.clear();
-        let mem_buffer = cmd_processor.current_output_memory_buffer.as_ref().unwrap();
-        read_slice(&mem_buffer, &mut read_slice_val[..], 0).unwrap();
+        let mut mem_buffer = cmd_processor.current_output_memory_buffer.as_mut().unwrap();
+        read_slice(&mut mem_buffer, &mut read_slice_val[..], 0).unwrap();
         expect_eq!(&read_slice_val[..], &[1, 2, 3, 4, 5, 6, 7, 8, 9], "initial values where not 0");
     }
 
@@ -1725,7 +1645,7 @@ mod tests {
         expect!(res.is_ok(), "Couldn't data to process");
 
         let mut slice = vec![0; 10];
-        read_slice(&memory_buffer, &mut slice, 0).expect("couldn't get slice");
+        read_slice(&mut memory_buffer, &mut slice, 0).expect("couldn't get slice");
         expect_eq!(
             slice,
             [0, 1, 10, 11, 27, 28, 6, 7, 8, 9],
