@@ -28,17 +28,15 @@ pub struct ClientPolicyCheck {
 pub trait ClientIdentification {
     /// checks that the provided client policy matches the client
     fn check_client_policy(
-        &self,
         client_id: &[u8],
         client_policy: &[u8],
     ) -> Result<ClientPolicyCheck, HwCryptoError>;
 
     /// retrieves the client current client policy
-    fn get_client_current_policy(&self, client_id: &[u8]) -> Result<Vec<u8>, HwCryptoError>;
+    fn get_client_current_policy(client_id: &[u8]) -> Result<Vec<u8>, HwCryptoError>;
 
     /// checks if the caller can access the requested keyslot
     fn client_can_access_keyslot(
-        &self,
         client_id: &[u8],
         key_slot: KeySlot,
     ) -> Result<bool, HwCryptoError>;

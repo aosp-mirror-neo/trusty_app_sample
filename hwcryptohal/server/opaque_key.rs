@@ -227,7 +227,7 @@ pub(crate) struct ExpirationTime {
 
 impl ExpirationTime {
     fn new(expiration_time_sec: u64) -> Result<Self, HwCryptoError> {
-        let set_time_ms = DeviceTimeImpl.current_epoch_time_ms()?;
+        let set_time_ms = DeviceTimeImpl::current_epoch_time_ms()?;
         let valid_period_ms = expiration_time_sec
             .checked_mul(1000)
             .ok_or(hwcrypto_err!(BAD_PARAMETER, "validity period is too big",))?;
@@ -235,7 +235,7 @@ impl ExpirationTime {
     }
 
     pub(crate) fn check_validity(&self) -> Result<bool, HwCryptoError> {
-        let current_time_ms = DeviceTimeImpl.current_epoch_time_ms()?;
+        let current_time_ms = DeviceTimeImpl::current_epoch_time_ms()?;
         if current_time_ms < self.set_time_ms {
             return Err(hwcrypto_err!(INVALID_KEY, "current time is before expiry set time",));
         }
