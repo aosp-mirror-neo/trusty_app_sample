@@ -15,9 +15,6 @@
  */
 #[cfg(test)]
 mod tests {
-    pub(crate) const RUST_HWCRYPTO_SERVICE: &str =
-        "android.hardware.security.see.hwcrypto.IHwCryptoKey/default";
-
     use android_hardware_security_see_hwcrypto::aidl::android::hardware::security::see::hwcrypto::{
         types::{
             AesCipherMode::AesCipherMode, AesKey::AesKey,
@@ -30,14 +27,14 @@ mod tests {
         CryptoOperation::CryptoOperation,
         CryptoOperationSet::CryptoOperationSet,
         ICryptoOperationContext::ICryptoOperationContext,
-        IHwCryptoKey::IHwCryptoKey,
         KeyPolicy::KeyPolicy,
         OperationParameters::OperationParameters,
     };
     use binder::Strong;
     use std::collections::HashMap;
-    use service_manager::wait_for_interface;
     use test::{expect, assert_ok};
+
+    use crate::tests::get_hwcryptokey;
 
     #[derive(Debug, Clone, PartialEq)]
     enum OPERATION {
@@ -195,8 +192,7 @@ mod tests {
     }
 
     fn run_aes_vectors(vectors: Vec<Vector>) {
-        let hw_crypto: binder::Strong<dyn IHwCryptoKey> =
-            assert_ok!(wait_for_interface(RUST_HWCRYPTO_SERVICE));
+        let hw_crypto = assert_ok!(get_hwcryptokey(), "couldn't retrieve hw crypto binder");
         let hw_crypto_ops =
             hw_crypto.getHwCryptoOperations().expect("couldn't get key crypto ops.");
 
