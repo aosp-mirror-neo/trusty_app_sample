@@ -31,9 +31,10 @@ mod hwcrypto_operations;
 mod opaque_key;
 mod service_encryption_key;
 
-use hwcryptohalinterfaces::{ClientIdentification, DeviceKeys, DeviceTime};
+use hwcryptohalinterfaces::{ClientIdentification, DeviceKeys, DeviceTime, MemoryMappedObject};
 use hwcryptohalplatform::{
-    AesImpl, ClientIdentificationImpl, DeviceKeysImpl, DeviceTimeImpl, HmacImpl, RngImpl,
+    AesImpl, ClientIdentificationImpl, DeviceKeysImpl, DeviceTimeImpl, HmacImpl,
+    MemoryMappedObjectImpl, RngImpl,
 };
 use kmr_common::crypto::{Aes, Hkdf, Hmac, Rng};
 use static_assertions::assert_impl_all;
@@ -41,6 +42,7 @@ use static_assertions::assert_impl_all;
 assert_impl_all!(ClientIdentificationImpl: ClientIdentification);
 assert_impl_all!(DeviceKeysImpl: DeviceKeys);
 assert_impl_all!(DeviceTimeImpl: DeviceTime);
+assert_impl_all!(MemoryMappedObjectImpl: MemoryMappedObject);
 
 assert_impl_all!(AesImpl: Aes);
 assert_impl_all!(HmacImpl: Hkdf, Hmac);
