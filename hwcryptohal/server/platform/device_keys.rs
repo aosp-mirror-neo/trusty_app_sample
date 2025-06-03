@@ -15,15 +15,25 @@
  */
 
 //! Module implementing the `DeviceKeys` for trusty.
+use android_hardware_security_see_hwcrypto::aidl::android::hardware::security::see::hwcrypto::KeyPolicy::KeyPolicy;
 use hwcryptohal_common::{err::HwCryptoError, hwcrypto_err};
 use hwcryptohalinterfaces::{DeviceKeys, KeymintHmacKey};
 use hwkey::{Hwkey, KdfVersion, OsRollbackVersion, RollbackVersionSource};
 
-#[derive(Default)]
 pub struct TrustyDeviceKeys;
 
 impl DeviceKeys for TrustyDeviceKeys {
-    fn get_keymint_shared_hmac_key() -> Result<KeymintHmacKey, HwCryptoError> {
+    fn get_keymint_shared_hmac_key(_policy: &KeyPolicy) -> Result<KeymintHmacKey, HwCryptoError> {
+        // TODO: Bug 416737037 implement shared HMAC key generation
+        Err(hwcrypto_err!(UNSUPPORTED, "error communicating with HwKey service"))
+    }
+
+    fn generate_keymint_shared_hmac_key(
+        _label: &[u8],
+        _context: &[u8],
+        _key_len: usize,
+        _check_label: &[u8],
+    ) -> Result<Vec<u8>, HwCryptoError> {
         // TODO: Bug 416737037 implement shared HMAC key generation
         Err(hwcrypto_err!(UNSUPPORTED, "error communicating with HwKey service"))
     }

@@ -28,6 +28,7 @@ MODULE_LIBRARY_DEPS += \
 	frameworks/native/libs/binder/trusty/rust \
 	trusty/user/app/sample/hwcryptohal/aidl/rust  \
 	trusty/user/app/sample/hwcryptohal/common  \
+	trusty/user/base/lib/keymint-rust/common \
 	$(call FIND_CRATE,vm-memory) \
 
 MODULE_RUST_USE_CLIPPY := true
