@@ -57,10 +57,10 @@ impl IHwCryptoOperations for HwCryptoOperations {
                     cmd_processor.process_all_steps(&mut command_list.operations)?;
                     if !cmd_processor.is_destroyed() {
                         let operation_context = CryptoOperationContext::new_binder(cmd_processor);
-                        (*results
+                        results
                             .last_mut()
-                            .expect("shouldn't happen, we pushed an element before match"))
-                        .context = Some(operation_context);
+                            .expect("shouldn't happen, we pushed an element before match")
+                            .context = Some(operation_context);
                     }
                 }
                 Some(operation_context) => {

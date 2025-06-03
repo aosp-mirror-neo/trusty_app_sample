@@ -22,5 +22,5 @@ use hwcryptohal_common::err::HwCryptoError;
 pub trait DeviceTime {
     /// Returns time in ms from a platform defined epoch. The time must not go back in time for a
     /// given boot.
-    fn current_epoch_time_ms(&self) -> Result<u64, HwCryptoError>;
+    fn current_epoch_time_ms() -> Result<u64, HwCryptoError>;
 }

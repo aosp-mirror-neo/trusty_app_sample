@@ -100,7 +100,7 @@ impl ClientPolicyWrapper {
     fn new_current(client_id: &[u8]) -> Result<Self, HwCryptoError> {
         let header = Some(EncryptionHeader::generate(EncryptedContent::ClientPolicy)?);
         let device_key_policy = Self::get_device_key_service_current_version()?;
-        let client_policy = ClientIdentificationImpl.get_client_current_policy(client_id)?;
+        let client_policy = ClientIdentificationImpl::get_client_current_policy(client_id)?;
         Ok(ClientPolicyWrapper { client_policy, device_key_policy, header })
     }
 
@@ -199,8 +199,11 @@ impl HwCryptoKey {
         let (caller_client_policy, device_key_policy) =
             ClientPolicyWrapper::from_encrypted_slice(client_policy_for_versioned_key)?
                 .into_client_and_device_key_policies()?;
-        let ClientPolicyCheck { policy_matches, policy_is_current } = ClientIdentificationImpl
-            .check_client_policy(self.client_id.as_slice(), caller_client_policy.as_slice())?;
+        let ClientPolicyCheck { policy_matches, policy_is_current } =
+            ClientIdentificationImpl::check_client_policy(
+                self.client_id.as_slice(),
+                caller_client_policy.as_slice(),
+            )?;
         if check_client_policy_owner && !policy_matches {
             return Err(hwcrypto_err!(BAD_PARAMETER, "client identity mismatch"));
         }
@@ -249,7 +252,8 @@ impl HwCryptoKey {
     }
 
     fn check_caller_can_access_keyslot(&self, keyslot: KeySlot) -> Result<(), HwCryptoError> {
-        if ClientIdentificationImpl.client_can_access_keyslot(self.client_id.as_slice(), keyslot)? {
+        if ClientIdentificationImpl::client_can_access_keyslot(self.client_id.as_slice(), keyslot)?
+        {
             Ok(())
         } else {
             Err(hwcrypto_err!(UNAUTHORIZED, "caller do not have permission to access this key"))

@@ -21,11 +21,10 @@ use log::error;
 
 const NANOSECONDS_IN_1_MS: u64 = 1000000;
 
-#[derive(Default)]
 pub struct TrustyDeviceTime;
 
 impl DeviceTime for TrustyDeviceTime {
-    fn current_epoch_time_ms(&self) -> Result<u64, HwCryptoError> {
+    fn current_epoch_time_ms() -> Result<u64, HwCryptoError> {
         let mut secure_time_ns = 0;
         // Safety: external syscall gets valid raw pointer to a `u64`.
         let rc = unsafe { trusty_sys::gettime(0, 0, &mut secure_time_ns) };

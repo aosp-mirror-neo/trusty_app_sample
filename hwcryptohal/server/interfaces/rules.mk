@@ -29,4 +29,6 @@ MODULE_LIBRARY_DEPS += \
 	trusty/user/app/sample/hwcryptohal/common  \
 	$(call FIND_CRATE,vm-memory) \
 
+MODULE_RUST_USE_CLIPPY := true
+
 include make/library.mk

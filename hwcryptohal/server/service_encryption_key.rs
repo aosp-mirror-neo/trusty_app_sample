@@ -83,12 +83,12 @@ impl TryFrom<ciborium::value::Integer> for EncryptedContent {
         let value: u64 = value.try_into().map_err(|_| {
             hwcrypto_err!(SERIALIZATION_ERROR, "couldn't convert CBOR integer into u64")
         })?;
-        Ok(value.try_into().map_err(|_| {
+        value.try_into().map_err(|_| {
             hwcrypto_err!(
                 SERIALIZATION_ERROR,
                 "Error converting encrypted content type from ciborium value"
             )
-        })?)
+        })
     }
 }
 
@@ -340,7 +340,7 @@ fn derive_key_hkdf(
     derivation_key: &[u8],
     derivation_context: &[u8],
 ) -> Result<Vec<u8>, HwCryptoError> {
-    Ok(HmacImpl.hkdf(&[], &derivation_key, &derivation_context, SERVICE_KEK_LENGTH)?)
+    Ok(HmacImpl.hkdf(&[], derivation_key, derivation_context, SERVICE_KEK_LENGTH)?)
 }
 
 fn get_new_key_derivation_context() -> [u8; KEY_DERIVATION_CTX_LENGTH] {
