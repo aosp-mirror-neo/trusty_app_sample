@@ -15,8 +15,8 @@
  */
 
 //! Setting up the server for the Hello World Trusted HAL service.
-use crate::hand_over_service::HandoverService;
 use crate::hello_world_trusted_service::HelloWorldService;
+use authmgr_be_lib::{default_handover_port_config, HandoverService};
 use log::error;
 use rpcbinder::RpcServer;
 use service_manager::service_name_to_trusty_c_port;
@@ -34,25 +34,39 @@ pub const HANDOVER_SERVICE_PORT: &str = "IHandover/android.hardware.security.IHe
 // for `on_connect` method that is invoked in the call path of connection handover.
 pub const HELLO_WORLD_TRUSTED_SERVICE_PORT: &str = "android.hardware.security.IHelloWorld/default";
 
+fn hello_service_port_cfg() -> Result<PortCfg, TipcError> {
+    let hello_service_port_cfg = PortCfg::new_raw(
+        service_name_to_trusty_c_port(HELLO_WORLD_TRUSTED_SERVICE_PORT).map_err(|e| {
+            error!("Failed to construct the hello service port name: {:?}", e);
+            TipcError::UnknownError
+        })?,
+    )
+    .allow_ta_connect()
+    .allow_ns_connect();
+    Ok(hello_service_port_cfg)
+}
+
 pub fn main_loop() -> Result<(), TipcError> {
     let handle_set_wrapper = Arc::new(HandleSetWrapper::new()?);
     let handle_set_wrapper_clone = Arc::clone(&handle_set_wrapper);
-    let helloworld_binder = HelloWorldService::new_binder();
-    let helloworld_rpc_service = Arc::new(RpcServer::new(helloworld_binder.as_binder()));
+
+    let cb_per_session_with_client_id =
+        move |client_id| HelloWorldService::new_per_session(client_id);
+    let helloworld_rpc_service =
+        Arc::new(RpcServer::new_per_session(cb_per_session_with_client_id));
 
     // Only the AuthMgr BE TA is allowed to connect
-    let handover_service_port_cfg =
-        PortCfg::new_raw(service_name_to_trusty_c_port(HANDOVER_SERVICE_PORT).map_err(|e| {
-            error!("Failed to construct the handover service port name: {:?}", e);
-            TipcError::UnknownError
-        })?)
-        .allow_ta_connect();
+    let handover_service_port_cfg = default_handover_port_config(HANDOVER_SERVICE_PORT)?;
 
     let cb_per_session = move |uuid| {
-        HandoverService::new_handover_session(
-            uuid,
-            Arc::downgrade(&handle_set_wrapper),
-            Arc::clone(&helloworld_rpc_service),
+        Some(
+            HandoverService::new_handover_session(
+                uuid,
+                Arc::downgrade(&handle_set_wrapper),
+                Arc::clone(&helloworld_rpc_service),
+                hello_service_port_cfg().ok()?,
+            )
+            .as_binder(),
         )
     };
 

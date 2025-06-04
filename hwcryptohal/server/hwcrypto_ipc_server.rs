@@ -23,13 +23,21 @@ use hwcryptohal_common::{err::HwCryptoError, hwcrypto_err};
 use rpcbinder::RpcServer;
 use std::sync::Arc;
 use tipc::raw::{EventLoop, HandleSetWrapper};
-use tipc::{self, PortCfg, Uuid};
+use tipc::{self, ClientIdentifier, PortCfg};
 
 pub(crate) const RUST_SERVICE_PORT: &CStr = c"com.android.trusty.rust.hwcryptohal.V1";
-pub(crate) const HANDOVER_SERVICE_PORT: &CStr = c"ahss.hwcrypto.IHwCryptoKey/default.hnd";
+pub(crate) const HANDOVER_SERVICE_PORT: &str =
+    "android.hardware.security.see.hwcrypto.IHwCryptoKey/default.hnd";
 pub(crate) const NUM_IPC_QUEUES: u32 = 4;
 
-fn create_device_key_service(uuid: Uuid) -> Option<SpIBinder> {
+fn create_device_key_service(client_identifier: ClientIdentifier) -> Option<SpIBinder> {
+    let uuid = match client_identifier {
+        ClientIdentifier::UUID(uuid) => uuid,
+        _ => {
+            log::error!("Expected a Uuid as client id, got: {:?}", client_identifier);
+            return None;
+        }
+    };
     let mut client_id = Vec::new();
     let uuid_string = uuid.to_string();
     let uuid_bytes = uuid_string.as_bytes();
@@ -65,10 +73,10 @@ pub fn main_loop() -> Result<(), HwCryptoError> {
 
     let handle_set_wrapper_for_cb = Arc::clone(&handle_set_wrapper);
 
-    let handover_cb_per_session = move |uuid| {
+    let handover_cb_per_session = move |client_id| {
         Some(
             HandoverService::new_handover_session(
-                uuid,
+                client_id,
                 Arc::downgrade(&handle_set_wrapper_for_cb),
                 Arc::clone(&hwdk_rpc_server),
                 hwcryptohal_port_cfg().ok()?,
