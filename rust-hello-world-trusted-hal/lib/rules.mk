@@ -30,7 +30,7 @@ MODULE_LIBRARY_DEPS += \
 	frameworks/native/libs/binder/trusty/rust/rpcbinder \
 	trusty/user/app/authmgr/authmgr-be/lib \
 	trusty/user/app/sample/rust-hello-world-trusted-hal/aidl \
-	trusty/user/base/interface/authmgr-handover/aidl \
+	trusty/user/base/interface/authmgr-dice-policy-matching/aidl \
 	trusty/user/base/lib/authgraph-rust/boringssl \
 	trusty/user/base/lib/service_manager/client \
 	trusty/user/base/lib/tipc/rust \

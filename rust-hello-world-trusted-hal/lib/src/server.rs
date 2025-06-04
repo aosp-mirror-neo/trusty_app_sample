@@ -15,24 +15,24 @@
  */
 
 //! Setting up the server for the Hello World Trusted HAL service.
-use crate::hello_world_trusted_service::HelloWorldService;
+use crate::hello_world_trusted_service::{HelloWorldGlobalState, HelloWorldService};
 use authmgr_be_lib::{default_handover_port_config, HandoverService};
 use log::error;
 use rpcbinder::RpcServer;
 use service_manager::service_name_to_trusty_c_port;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use tipc::raw::{EventLoop, HandleSetWrapper};
 use tipc::{PortCfg, TipcError};
 
 // Port for the handover service for the HelloWorld trusted service
-pub const HANDOVER_SERVICE_PORT: &str = "IHandover/android.hardware.security.IHelloWorld/default";
+pub const HANDOVER_SERVICE_PORT: &str = "IHandover/android.trusty.IHelloWorld/default";
 
 // Port for the HelloWorld trusted service
 // Note: The TAs that host trusted services do not usually register a port handle for a trusted
 // service in their event loop. They register a port handle only for the corresponding hand over
 // service. We define the port name for the trusted service here because it is needed as an input
 // for `on_connect` method that is invoked in the call path of connection handover.
-pub const HELLO_WORLD_TRUSTED_SERVICE_PORT: &str = "android.hardware.security.IHelloWorld/default";
+pub const HELLO_WORLD_TRUSTED_SERVICE_PORT: &str = "android.trusty.IHelloWorld/default";
 
 fn hello_service_port_cfg() -> Result<PortCfg, TipcError> {
     let hello_service_port_cfg = PortCfg::new_raw(
@@ -49,9 +49,9 @@ fn hello_service_port_cfg() -> Result<PortCfg, TipcError> {
 pub fn main_loop() -> Result<(), TipcError> {
     let handle_set_wrapper = Arc::new(HandleSetWrapper::new()?);
     let handle_set_wrapper_clone = Arc::clone(&handle_set_wrapper);
-
+    let global_state = Arc::new(Mutex::new(HelloWorldGlobalState::new()));
     let cb_per_session_with_client_id =
-        move |client_id| HelloWorldService::new_per_session(client_id);
+        move |client_id| HelloWorldService::new_per_session(client_id, Arc::clone(&global_state));
     let helloworld_rpc_service =
         Arc::new(RpcServer::new_per_session(cb_per_session_with_client_id));
 
