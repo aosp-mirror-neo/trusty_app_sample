@@ -98,7 +98,7 @@ impl MemoryMappedObject for TrustyMappedObject {
         Ok(Self { buffer_ptr: MappedBuffer(buffer_ptr), buffer_size })
     }
 
-    fn get_memory_slice<'a>(&'a mut self) -> Result<VolatileSlice<'a>, HwCryptoError> {
+    fn get_memory_slice(&mut self) -> Result<VolatileSlice<'_>, HwCryptoError> {
         // SAFETY: Memory at address `buffer_ptr` has length `buffer_size` because if not mmap
         //         operation would have failed. All accesses to this memory on this service are
         //         through the VolatileSlice methods, so accesses are volatile accesses. Memory is

@@ -43,8 +43,7 @@ struct ClientPolicyUuidBased {
 
 impl ClientPolicyUuidBased {
     fn get_current_version() -> Result<u32, HwCryptoError> {
-        let device_keys = crate::DeviceKeysImpl;
-        bytes_to_version(device_keys.get_caller_current_security_version()?.as_slice())
+        bytes_to_version(crate::DeviceKeysImpl.get_caller_current_security_version()?.as_slice())
     }
 
     fn new_current(uuid: Uuid) -> Result<Self, HwCryptoError> {
@@ -127,12 +126,10 @@ fn get_uuid(uuid_bytes: &[u8]) -> Result<Uuid, HwCryptoError> {
     Ok(Uuid::new_from_string(uuid_str)?)
 }
 
-#[derive(Default)]
 pub struct TrustyClientIdentification;
 
 impl ClientIdentification for TrustyClientIdentification {
     fn check_client_policy(
-        &self,
         client_id: &[u8],
         client_policy: &[u8],
     ) -> Result<ClientPolicyCheck, HwCryptoError> {
@@ -145,13 +142,12 @@ impl ClientIdentification for TrustyClientIdentification {
         Ok(ClientPolicyCheck { policy_matches, policy_is_current })
     }
 
-    fn get_client_current_policy(&self, client_id: &[u8]) -> Result<Vec<u8>, HwCryptoError> {
+    fn get_client_current_policy(client_id: &[u8]) -> Result<Vec<u8>, HwCryptoError> {
         let client_id = get_uuid(client_id)?;
         Ok(ClientPolicyUuidBased::new_current(client_id)?.to_cbor_value()?.to_vec()?)
     }
 
     fn client_can_access_keyslot(
-        &self,
         client_id: &[u8],
         _key_slot: KeySlot,
     ) -> Result<bool, HwCryptoError> {

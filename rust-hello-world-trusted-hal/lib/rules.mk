@@ -28,6 +28,7 @@ MODULE_LIBRARY_DEPS += \
 	frameworks/native/libs/binder/trusty/rust \
 	frameworks/native/libs/binder/trusty/rust/binder_rpc_server \
 	frameworks/native/libs/binder/trusty/rust/rpcbinder \
+	trusty/user/app/authmgr/authmgr-be/lib \
 	trusty/user/app/sample/rust-hello-world-trusted-hal/aidl \
 	trusty/user/base/interface/authmgr-handover/aidl \
 	trusty/user/base/lib/authgraph-rust/boringssl \

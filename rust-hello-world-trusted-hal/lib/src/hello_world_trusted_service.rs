@@ -15,27 +15,31 @@
  */
 
 //! Implementation of IHelloWorld.aidl
-
+use binder::SpIBinder;
 use hello_world_trusted_aidl::aidl::android::trusty::trustedhal::IHelloWorld::{
     BnHelloWorld, IHelloWorld,
 };
 use hello_world_trusted_aidl::binder;
 use log::info;
+use tipc::ClientIdentifier;
 
-pub struct HelloWorldService;
+pub struct HelloWorldService {
+    client_id: ClientIdentifier,
+}
 
 impl binder::Interface for HelloWorldService {}
 
 impl HelloWorldService {
-    /// Creates a binder object
-    pub fn new_binder() -> binder::Strong<dyn IHelloWorld> {
-        BnHelloWorld::new_binder(HelloWorldService, binder::BinderFeatures::default())
+    /// Creates a per-session binder object with client id
+    pub fn new_per_session(client_id: ClientIdentifier) -> Option<SpIBinder> {
+        let hello_service = HelloWorldService { client_id };
+        Some(BnHelloWorld::new_binder(hello_service, binder::BinderFeatures::default()).as_binder())
     }
 }
 
 impl IHelloWorld for HelloWorldService {
     fn sayHello(&self, name: &str) -> binder::Result<String> {
-        info!("In IHelloWorld trusted service...");
+        info!("In IHelloWorld trusted service... Client id: {:?}", self.client_id);
         let mut hello_string = String::from("Hello ");
         hello_string.push_str(name);
         Ok(hello_string)
