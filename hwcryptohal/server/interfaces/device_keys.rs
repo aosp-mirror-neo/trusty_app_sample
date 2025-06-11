@@ -23,14 +23,19 @@ pub struct KeymintHmacKey(pub [u8; 32]);
 
 /// Abstraction of device specific keys
 pub trait DeviceKeys {
-    /// Returns the Keymint shared HMAC key. The size of the key matches what Android expects.
+    /// Returns the Keymint shared HMAC key. The size of the key matches what Android expects. The
+    /// key will be passed to the caller as a HwCrypto `IOpaqueKey`, which means all uses of it will
+    /// be done through the HWCrypto HAL service. Notice that internally this key is used through an
+    /// implementetion of the KeyMint `Hmac` trait. This function shall return a valid key after
+    /// `generate_keymint_shared_hmac_key` has been called.
     fn get_keymint_shared_hmac_key(&self) -> Result<KeymintHmacKey, HwCryptoError>;
 
     /// Returns a unique versioned key cryptographically bound to the caller, context and security
     /// version. If the caller current version is greater or equal than the provided version,
     /// the function should succeed. Calling this function with the same caller, version and context
-    /// should generate the same key, if the version check passes. Notice that the security version
-    /// could be a DICE policy.
+    /// should generate the same key, if the version check passes. Notice that `key_sec_version`
+    /// could be a DICE policy and will be a byte array previously received by calling
+    /// `get_caller_current_security_version`.
     fn derive_caller_unique_key(
         &self,
         key_context: &[u8],

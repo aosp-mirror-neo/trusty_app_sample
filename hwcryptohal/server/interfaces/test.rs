@@ -31,7 +31,7 @@ pub enum ClientIdentity {
 /// Trait to access a single page of memory allocated for the test. Implementers should use `Drop`
 /// for any cleanup required
 pub trait TestAllocatedPage {
-    /// returns a file descriptor that can be used to map this test page using a
+    /// Returns a file descriptor that can be used to map this test page using a
     /// `MemoryMappedObject`. Calling this is unsafe because the caller have to make sure to not use
     /// the returned `ParcelFileDescriptor` once the `TestAllocatedPage` goes out of scope.
     ///
@@ -41,20 +41,21 @@ pub trait TestAllocatedPage {
     /// the returned `ParcelFileDescriptor`.
     unsafe fn get_parcel_file_descriptor(&mut self) -> Result<ParcelFileDescriptor, HwCryptoError>;
 
-    /// returns the total allocation size. All implementations of `TestAllocatedPage` must always
+    /// Returns the total allocation size. All implementations of `TestAllocatedPage` must always
     /// allocate the same amount of memory for all `TestAllocatedPage`s
     fn allocation_size(&self) -> usize;
 }
 
 /// Abstraction of device specific time functionality
 pub trait TestHelpers {
-    /// returns a byte blob that can be used on `ClientIdentification` which the desired
-    /// capabilities indicated by `identity`
+    /// Returns a byte blob that can be used on `ClientIdentification` which the desired
+    /// capabilities indicated by `identity`.
     fn mock_client_id(identity: ClientIdentity) -> Vec<u8>;
 
-    /// returns a `TestAllocatedPage` which will contains on it the data of `initial_data`.
+    /// Returns a `TestAllocatedPage` which will contains on it the data of `initial_data`.
     /// `initial_data` doesn't need to cover the whole allocated memory. Any space not initialized
-    /// by `initial_data` must be set to 0
+    /// by `initial_data` must be set to 0. This memory can be referenced latter using a
+    /// `ParcelFileDescriptor`.
     fn allocate_test_page(
         initial_data: Option<&[u8]>,
     ) -> Result<impl TestAllocatedPage, HwCryptoError>;
