@@ -26,16 +26,23 @@ pub struct ClientPolicyCheck {
 
 /// Abstraction of client identification and authorization
 pub trait ClientIdentification {
-    /// checks that the provided client policy matches the client
+    /// Verifies if provided `client_policy` is valid for the current client and also if the version
+    /// of all the components are the most current ones. For a policy to be valid, the
+    /// implementation needs to verify that the client identity matches the policy and also that any
+    /// version of the components on the policy is less or equal than the current running component.
+    /// This is to prevent a rollback attack.
     fn check_client_policy(
         client_id: &[u8],
         client_policy: &[u8],
     ) -> Result<ClientPolicyCheck, HwCryptoError>;
 
-    /// retrieves the client current client policy
+    /// Returns a valid and current policy tied to the connected HAL client. Notice that the policy
+    /// can be stored by the external client and re-used on a future session.
     fn get_client_current_policy(client_id: &[u8]) -> Result<Vec<u8>, HwCryptoError>;
 
-    /// checks if the caller can access the requested keyslot
+    /// Checks if the connected HAL client should have access to the requested keyslot. Currently
+    /// the only keyslot supported is used to get an opaque handle to use the KeyMint Shared HMAC
+    /// key.
     fn client_can_access_keyslot(
         client_id: &[u8],
         key_slot: KeySlot,

@@ -23,14 +23,16 @@ use vm_memory::VolatileSlice;
 /// Abstraction of memory mapped objects. Notice that the trait do not contain an unmap function, so
 /// any cleanup needed by the implementation must be done by implementing `Drop`.
 pub trait MemoryMappedObject: Send {
-    /// Maps a `MemoryBufferParameter` into a `MemoryMappedObject`
+    /// Constructs a `MemoryMappedObject` by mapping the provided `MemoryBufferParameter`, which
+    /// contains a `ParcelFileDescriptor`.
     fn mmap(memory_buffer: &MemoryBufferParameter) -> Result<Self, HwCryptoError>
     where
         Self: std::marker::Sized;
 
-    /// Gets a memory slice that can be used to read or write on the memory mapped object
+    /// Returns a `VolatileSlice` (type provided by the crate `vm_memory`) which can be used to
+    /// read/write the mapped memory.
     fn get_memory_slice(&mut self) -> Result<VolatileSlice, HwCryptoError>;
 
-    /// Returns the mapped memory buffer size
+    /// Returns the mapped memory buffer size, which is the total size of the mapped data.
     fn buffer_size(&self) -> usize;
 }
