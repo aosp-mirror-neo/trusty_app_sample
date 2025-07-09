@@ -15,6 +15,7 @@
  */
 
 package android.trusty.trustedhal;
+import android.trusty.dice.policy.matching.PolicyMatchingResult;
 
 /**
  * This is an example service to demonstrate how to implement a Trusted HAL service to be compliant
@@ -25,4 +26,21 @@ interface IHelloWorld {
      * Simply returns the string: "Hello " + name.
      */
     String sayHello(in String name);
+
+    /**
+     * This method is for testing the policy matching service of AuthMgr.
+     * Behavior:
+     * 1. If dicePolicy is not provided AND if this is the first time the client invokes this method,
+     *    then call `getPolicy` method of AuthMgr to retrieve this client's latest DICE policy and
+     *    store it in-memory against the client-seq-number. Return PolicyMatchingResult::SUCCESS
+     *    upon successful invocation of `getPolicy`.
+     *
+     * 2. If dicePolicy is not provided AND if the client has invoked this method before (i.e.
+     *    there is an in-memory entry of the client's DICE policy), then call `matchPolicy` method
+     *    of AuthMgr and return the result returned from that invocation.
+     *
+     * 3. If dicePolicy is provided, call `matchPolicy` method of AuthMgr along with the provided
+     *    dicePolicy and return the result returned from that invocation.
+     */
+    PolicyMatchingResult sayHelloWithPolicy(in @nullable byte[] dicePolicy);
 }

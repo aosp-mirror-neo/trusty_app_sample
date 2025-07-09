@@ -23,6 +23,12 @@ MODULE_AIDL_LANGUAGE := rust
 MODULE_AIDL_PACKAGE := android/trusty/trustedhal
 
 MODULE_AIDLS := \
-    $(LOCAL_DIR)/$(MODULE_AIDL_PACKAGE)/IHelloWorld.aidl \
+	$(LOCAL_DIR)/$(MODULE_AIDL_PACKAGE)/IHelloWorld.aidl
+
+MODULE_AIDL_INCLUDES += -I trusty/user/base/interface/authmgr-dice-policy-matching/aidl
+
+MODULE_AIDL_RUST_DEPS += authmgr_dice_policy_matching_aidl
+
+MODULE_LIBRARY_DEPS += trusty/user/base/interface/authmgr-dice-policy-matching/aidl
 
 include make/aidl.mk
