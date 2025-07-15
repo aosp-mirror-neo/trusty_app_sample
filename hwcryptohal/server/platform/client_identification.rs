@@ -58,7 +58,7 @@ struct ClientPolicyUuidBased {
 
 impl ClientPolicyUuidBased {
     fn get_current_version() -> Result<u32, HwCryptoError> {
-        bytes_to_version(crate::DeviceKeysImpl.get_caller_current_security_version()?.as_slice())
+        bytes_to_version(crate::DeviceKeysImpl::get_caller_current_security_version()?.as_slice())
     }
 
     fn new_current(uuid: Uuid) -> Result<Self, HwCryptoError> {

@@ -23,13 +23,12 @@ use hwkey::{Hwkey, KdfVersion, OsRollbackVersion, RollbackVersionSource};
 pub struct TrustyDeviceKeys;
 
 impl DeviceKeys for TrustyDeviceKeys {
-    fn get_keymint_shared_hmac_key(&self) -> Result<KeymintHmacKey, HwCryptoError> {
+    fn get_keymint_shared_hmac_key() -> Result<KeymintHmacKey, HwCryptoError> {
         // TODO: Bug 416737037 implement shared HMAC key generation
         Err(hwcrypto_err!(UNSUPPORTED, "error communicating with HwKey service"))
     }
 
     fn derive_caller_unique_key(
-        &self,
         key_context: &[u8],
         key_sec_version: &[u8],
         key_size: usize,
@@ -54,7 +53,7 @@ impl DeviceKeys for TrustyDeviceKeys {
         Ok(derived_key)
     }
 
-    fn get_caller_current_security_version(&self) -> Result<Vec<u8>, HwCryptoError> {
+    fn get_caller_current_security_version() -> Result<Vec<u8>, HwCryptoError> {
         let hwkey_session = Hwkey::open()?;
 
         let version =

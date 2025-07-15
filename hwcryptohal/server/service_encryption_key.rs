@@ -332,7 +332,7 @@ impl TryFrom<&EncryptionHeader> for Header {
 /// Get the base versioned encryption key used by the service to derive other versioned context
 /// encryption keys
 fn get_encryption_key(header_version: &[u8], key_context: &[u8]) -> Result<Vec<u8>, HwCryptoError> {
-    DeviceKeysImpl.derive_caller_unique_key(key_context, header_version, SERVICE_KEK_LENGTH)
+    DeviceKeysImpl::derive_caller_unique_key(key_context, header_version, SERVICE_KEK_LENGTH)
 }
 
 // Create an AES key compatible with the current crypto backend used
@@ -371,7 +371,7 @@ pub(crate) fn parse_cborium_bytes_to_fixed_array(
 }
 
 pub(crate) fn get_service_current_version() -> Result<Vec<u8>, HwCryptoError> {
-    DeviceKeysImpl.get_caller_current_security_version()
+    DeviceKeysImpl::get_caller_current_security_version()
 }
 
 #[cfg(test)]
