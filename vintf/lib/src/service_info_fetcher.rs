@@ -91,9 +91,18 @@ impl IServiceInfoFetcher for ServiceInfoFetcher {
     }
 }
 
-fn transact<D: Deserialize>(b: &SpIBinder, transaction_code: TransactionCode) -> binder::Result<D> {
+fn transact<D: Deserialize + Default>(
+    b: &SpIBinder,
+    transaction_code: TransactionCode,
+) -> binder::Result<D> {
     let data = b.prepare_transact()?;
-    let parcel = b.submit_transact(transaction_code, data, 0)?;
+    let parcel = match b.submit_transact(transaction_code, data, 0) {
+        Ok(p) => p,
+        // UNKNOWN_TRANSACTION means the HAL doesn't implement this transaction.
+        // In this case, returning a default value as in the host HAL vintf VTS.
+        Err(binder::StatusCode::UNKNOWN_TRANSACTION) => return Ok(D::default()),
+        Err(e) => return Err(e.into()),
+    };
     let status: binder::Status =
         parcel.read().inspect_err(|e| error!("failed to read binder status: {e:?}"))?;
     if status.is_ok() {
