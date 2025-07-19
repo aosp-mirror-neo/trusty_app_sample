@@ -116,6 +116,7 @@ macro_rules! aidl_enum_wrapper {
 #[macro_export]
 macro_rules! cose_enum_gen {
     (enum $name:ident {$($field:ident = $field_val:literal),+ $(,)*}) => {
+        #[derive(Debug, PartialEq)]
         enum $name {
             $($field = $field_val),+
         }

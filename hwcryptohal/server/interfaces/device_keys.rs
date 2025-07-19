@@ -28,7 +28,7 @@ pub trait DeviceKeys {
     /// be done through the HWCrypto HAL service. Notice that internally this key is used through an
     /// implementetion of the KeyMint `Hmac` trait. This function shall return a valid key after
     /// `generate_keymint_shared_hmac_key` has been called.
-    fn get_keymint_shared_hmac_key(&self) -> Result<KeymintHmacKey, HwCryptoError>;
+    fn get_keymint_shared_hmac_key() -> Result<KeymintHmacKey, HwCryptoError>;
 
     /// Returns a unique versioned key cryptographically bound to the caller, context and security
     /// version. If the caller current version is greater or equal than the provided version,
@@ -37,7 +37,6 @@ pub trait DeviceKeys {
     /// could be a DICE policy and will be a byte array previously received by calling
     /// `get_caller_current_security_version`.
     fn derive_caller_unique_key(
-        &self,
         key_context: &[u8],
         key_sec_version: &[u8],
         key_size: usize,
@@ -45,5 +44,5 @@ pub trait DeviceKeys {
 
     /// Returns the caller current security version. Notice that this version could be a DICE
     /// policy.
-    fn get_caller_current_security_version(&self) -> Result<Vec<u8>, HwCryptoError>;
+    fn get_caller_current_security_version() -> Result<Vec<u8>, HwCryptoError>;
 }

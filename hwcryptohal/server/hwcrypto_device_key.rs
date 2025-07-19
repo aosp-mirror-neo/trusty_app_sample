@@ -222,7 +222,7 @@ impl HwCryptoKey {
                 if DeviceKeyId::DEVICE_BOUND_KEY != *key_id {
                     return Err(hwcrypto_err!(UNSUPPORTED, "unknown key id {:?}", key_id));
                 }
-                let derived_key = DeviceKeysImpl.derive_caller_unique_key(
+                let derived_key = DeviceKeysImpl::derive_caller_unique_key(
                     concat_context.as_slice(),
                     device_key_policy.as_slice(),
                     key_size,
@@ -390,7 +390,7 @@ impl IHwCryptoKey for HwCryptoKey {
         self.check_caller_can_access_keyslot(keyslot)?;
         match keyslot {
             KeySlot::KEYMINT_SHARED_HMAC_KEY => {
-                let hmac_key = DeviceKeysImpl.get_keymint_shared_hmac_key()?.0;
+                let hmac_key = DeviceKeysImpl::get_keymint_shared_hmac_key()?.0;
                 let mut hmac_key_vec = Vec::new();
                 hmac_key_vec.try_reserve(hmac_key.len()).map_err(|e| {
                     hwcrypto_err!(ALLOCATION_ERROR, "failed to space for key key {:?}", e)
