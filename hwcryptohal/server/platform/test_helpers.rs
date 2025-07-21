@@ -106,13 +106,13 @@ impl TestHelpers for TrustyTestHelpers {
                 let client_id = ClientIdentifier::UUID(
                     Uuid::new_from_string("f41a7796-975a-4279-8cc4-b73f8820430d").unwrap(),
                 );
-                client_id.as_tagged_bytes().into_vec()
+                client_id.c_repr().as_generic().as_bytes().to_vec()
             }
             ClientIdentity::Identity2 => {
                 let client_id = ClientIdentifier::UUID(
                     Uuid::new_from_string("f4240823-21a8-446b-96d4-7e48030827c8").unwrap(),
                 );
-                client_id.as_tagged_bytes().into_vec()
+                client_id.c_repr().as_generic().as_bytes().to_vec()
             }
         }
     }
