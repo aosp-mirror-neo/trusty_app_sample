@@ -123,7 +123,7 @@ impl TestHelpers for TrustyTestHelpers {
         // Mutex won't be poisoned on a single thread application
         let mut allocated_pages = PAGE_POOL.lock().unwrap();
         let page_size = get_page_size();
-        let mut allocated_page = if allocated_pages.len() == 0 {
+        let mut allocated_page = if allocated_pages.is_empty() {
             // We do not have available pages on the pool, allocate a new one
             Self::allocate_new_test_page()?
         } else {
