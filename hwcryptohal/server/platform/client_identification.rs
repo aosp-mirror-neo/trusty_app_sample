@@ -392,6 +392,7 @@ fn get_client_identifier(
         ClientIdentifier::VMID(_) => {
             Err(hwcrypto_err!(BAD_PARAMETER, "VMIDs not supported for identification"))
         }
+        _ => Err(hwcrypto_err!(BAD_PARAMETER, "Unsupported ClientIdentifier type")),
     }
 }
 
