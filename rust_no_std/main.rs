@@ -21,13 +21,13 @@
 //! should still work in a `no_std` environment, such as allocation.
 
 #![no_std]
-#![feature(start)]
+#![no_main]
 
 use core::panic::PanicInfo;
 use trusty_std::alloc::{FallibleVec, Vec};
 
-#[start]
-fn start(_argc: isize, _argv: *const *const u8) -> isize {
+#[no_mangle]
+extern "C" fn main(_argc: i32, _argv: *const *const u8) -> i32 {
     <Vec<u8> as FallibleVec<u8>>::try_with_capacity(128).unwrap();
 
     let message = b"Hello from no_std Rust!\n";
