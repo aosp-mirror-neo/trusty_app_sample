@@ -19,6 +19,7 @@
 #![feature(cfg_version)]
 // C string literals were stabilized in Rust 1.77
 #![cfg_attr(not(version("1.77")), feature(c_str_literals))]
+#![cfg_attr(version("1.86"), allow(clippy::doc_overindented_list_items))]
 
 pub const HANDOVER_SERVICE_PORT: &str =
     "IHandover/android.hardware.security.see.hwcrypto.IHwCryptoKey/default";
