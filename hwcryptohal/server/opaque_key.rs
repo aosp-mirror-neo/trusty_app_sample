@@ -1333,6 +1333,7 @@ pub(crate) fn check_key_material_with_policy(
                 key_type
             )),
         },
+        KeyMaterial::MlDsa(_variant, _key) => todo!("Add ML-DSA support"),
     }
 }
 
