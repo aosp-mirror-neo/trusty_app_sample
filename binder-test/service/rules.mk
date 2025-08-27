@@ -19,6 +19,8 @@ MODULE := $(LOCAL_DIR)
 
 MANIFEST := $(LOCAL_DIR)/manifest.json
 
+MODULE_CONSTANTS := $(LOCAL_DIR)/binder_test_consts.json
+
 MODULE_SRCS += \
 	$(LOCAL_DIR)/main.cpp \
 

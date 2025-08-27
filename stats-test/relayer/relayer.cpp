@@ -161,7 +161,7 @@ int main(void) {
     auto srvIStats = RpcServerTrusty::make(
             hset, RELAYER_PORT_ISTATS,
             std::make_shared<const RpcServerTrusty::PortAcl>(portAcl_TA),
-            maxMsgSize);
+            maxMsgSize, RELAYER_BINDER_TIPC_QUEUE_LEN);
     if (srvIStats == nullptr) {
         return EXIT_FAILURE;
     }
@@ -172,7 +172,7 @@ int main(void) {
     auto srvIStatsSetterNormalWorld = RpcServerTrusty::make(
             hset, RELAYER_PORT_ISTATS_SETTER_NORMAL_WORLD,
             std::make_shared<const RpcServerTrusty::PortAcl>(portAcl_NS),
-            maxMsgSize);
+            maxMsgSize, RELAYER_BINDER_TIPC_QUEUE_LEN);
     if (srvIStatsSetterNormalWorld == nullptr) {
         return EXIT_FAILURE;
     }
@@ -181,7 +181,7 @@ int main(void) {
     auto srvIStatsSetterSecureWorld = RpcServerTrusty::make(
             hset, RELAYER_PORT_ISTATS_SETTER_SECURE_WORLD,
             std::make_shared<const RpcServerTrusty::PortAcl>(portAcl_TA),
-            maxMsgSize);
+            maxMsgSize, RELAYER_BINDER_TIPC_QUEUE_LEN);
     if (srvIStatsSetterSecureWorld == nullptr) {
         return EXIT_FAILURE;
     }

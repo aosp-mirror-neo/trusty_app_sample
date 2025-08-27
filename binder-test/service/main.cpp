@@ -16,6 +16,7 @@
 
 #define TLOG_TAG "binder-test-service"
 
+#include <binder_test_consts.h>
 #include <inttypes.h>
 #include <lib/tipc/tipc.h>
 #include <lk/err_ptr.h>
@@ -171,7 +172,7 @@ int main(void) {
     auto srv = android::RpcServerTrusty::make(
             hset, ITestService::PORT().c_str(),
             std::make_shared<const android::RpcServerTrusty::PortAcl>(port_acl),
-            max_msg_size);
+            max_msg_size, TEST_SRV_BINDER_TIPC_QUEUE_LEN);
     if (srv == nullptr) {
         return EXIT_FAILURE;
     }
