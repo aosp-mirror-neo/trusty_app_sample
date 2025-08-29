@@ -16,11 +16,20 @@
 
 mod hwcrypto_ipc_server;
 
-use log::info;
+fn log_formatter(record: &log::Record) -> String {
+    let line = record.line().unwrap_or(0);
+    let file = record.file().unwrap_or("unknown file");
+    format!("{}: hwcryptohal: {}:{} {}\n", record.level(), file, line, record.args())
+}
 
 fn main() {
-    trusty_log::init();
-    info!("starting HWCrypto server");
+    let config = trusty_log::TrustyLoggerConfig::default()
+        .with_min_level(log::Level::Info)
+        .format(&log_formatter);
+
+    trusty_log::init_with_config(config);
+
+    log::info!("starting HWCrypto server");
 
     hwcrypto_ipc_server::main_loop().expect("main loop failed, should never happen");
 
