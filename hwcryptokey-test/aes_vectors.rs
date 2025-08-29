@@ -15,7 +15,8 @@
  */
 #[cfg(test)]
 mod tests {
-    pub(crate) const RUST_HWCRYPTO_SERVICE_PORT: &str = "com.android.trusty.rust.hwcryptohal.V1";
+    pub(crate) const RUST_HWCRYPTO_SERVICE: &str =
+        "android.hardware.security.see.hwcrypto.IHwCryptoKey/default";
 
     use android_hardware_security_see_hwcrypto::aidl::android::hardware::security::see::hwcrypto::{
         types::{
@@ -34,10 +35,9 @@ mod tests {
         OperationParameters::OperationParameters,
     };
     use binder::Strong;
-    use rpcbinder::RpcSession;
     use std::collections::HashMap;
-    use test::expect;
-    use trusty_std::ffi::{CString, FallibleCString};
+    use service_manager::wait_for_interface;
+    use test::{expect, assert_ok};
 
     #[derive(Debug, Clone, PartialEq)]
     enum OPERATION {
@@ -195,10 +195,8 @@ mod tests {
     }
 
     fn run_aes_vectors(vectors: Vec<Vector>) {
-        let port =
-            CString::try_new(RUST_HWCRYPTO_SERVICE_PORT).expect("Failed to allocate port name");
-        let hw_crypto: Strong<dyn IHwCryptoKey> =
-            RpcSession::new().setup_trusty_client(port.as_c_str()).expect("Failed to connect");
+        let hw_crypto: binder::Strong<dyn IHwCryptoKey> =
+            assert_ok!(wait_for_interface(RUST_HWCRYPTO_SERVICE));
         let hw_crypto_ops =
             hw_crypto.getHwCryptoOperations().expect("couldn't get key crypto ops.");
 
