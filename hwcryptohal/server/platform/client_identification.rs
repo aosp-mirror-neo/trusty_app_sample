@@ -160,8 +160,7 @@ impl TaggedClientPolicy {
         let actual_type = self.get_tag();
         if expected_type != actual_type {
             error!(
-                "Wrong policy type received. Expected {:?}, received{:?}",
-                expected_type, actual_type
+                "Wrong policy type received. Expected {expected_type:?}, received{actual_type:?}"
             );
             return Err(hwcrypto_err!(
                 BAD_PARAMETER,
@@ -306,7 +305,7 @@ fn get_client_seq_number(client_id: ClientIdentifier) -> Result<i64, HwCryptoErr
     match client_id {
         ClientIdentifier::ClientSeqNumber(seq_number) => Ok(seq_number),
         _ => {
-            error!("Received {:?} ID instead of an uuid", client_id);
+            error!("Received {client_id:?} ID instead of an uuid");
             Err(hwcrypto_err!(
                 BAD_PARAMETER,
                 "received {:?} ID instead of client sequence number",
@@ -328,7 +327,7 @@ impl TrustyClientIdentification for TrustyDiceIdentification {
         let client_dice_policy = client_policy.get_dice_based_policy()?;
         let service_check_result =
             service.matchPolicy(seq_num, client_dice_policy).map_err(|e| {
-                error!("Couldn't check dice policy: {:?}", e);
+                error!("Couldn't check dice policy: {e:?}");
                 hwcrypto_err!(GENERIC_ERROR, "couldn't check dice policy {:?}", e)
             })?;
         let mut client_policy_check =
@@ -349,7 +348,7 @@ impl TrustyClientIdentification for TrustyDiceIdentification {
         let service = get_dice_policy_matching_service()?;
         let seq_num = get_client_seq_number(client_id)?;
         let dice_policy = service.getPolicy(seq_num).map_err(|e| {
-            error!("Couldn't get DICE policy: {:?}", e);
+            error!("Couldn't get DICE policy: {e:?}");
             hwcrypto_err!(GENERIC_ERROR, "couldn't get DICE policy {:?}", e)
         })?;
         Ok(TaggedClientPolicy::new_dice_policy(dice_policy))
@@ -377,7 +376,7 @@ fn get_uuid(client_id: ClientIdentifier) -> Result<Uuid, HwCryptoError> {
     match client_id {
         ClientIdentifier::UUID(uuid) => Ok(uuid),
         _ => {
-            error!("Received {:?} ID instead of an uuid", client_id);
+            error!("Received {client_id:?} ID instead of an uuid");
             Err(hwcrypto_err!(BAD_PARAMETER, "received {:?} ID instead of an uuid", client_id))
         }
     }

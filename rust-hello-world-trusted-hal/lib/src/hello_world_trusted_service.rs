@@ -77,7 +77,7 @@ impl IHelloWorld for HelloWorldService {
         trace!("In IHelloWorld trusted service - sayHello.");
         match self.client_id {
             ClientIdentifier::ClientSeqNumber(n) => {
-                info!("sayHello invoked by client with seq num: {}", n);
+                info!("sayHello invoked by client with seq num: {n}");
             }
             _ => {
                 log::error!("Expected a client seq num, got {:?}", self.client_id);
@@ -96,7 +96,7 @@ impl IHelloWorld for HelloWorldService {
         trace!("In IHelloWorld trusted service - sayHelloWithPolicy.");
         let client_seq_num = match self.client_id {
             ClientIdentifier::ClientSeqNumber(n) => {
-                info!("sayHelloWithPolicy invoked by client with seq num: {}", n);
+                info!("sayHelloWithPolicy invoked by client with seq num: {n}");
                 n
             }
             _ => {
@@ -106,7 +106,7 @@ impl IHelloWorld for HelloWorldService {
         };
 
         let dice_policy_matching_service = get_dice_policy_matching_service().map_err(|e| {
-            error!("Failed to get the dice policy matching service due to: {:?}.", e);
+            error!("Failed to get the dice policy matching service due to: {e:?}.");
             binder_service_specific_error()
         })?;
 
@@ -127,7 +127,7 @@ impl IHelloWorld for HelloWorldService {
                 if !global_state.policy_store.contains_key(&client_seq_num) {
                     let dice_policy =
                         dice_policy_matching_service.getPolicy(client_seq_num).map_err(|e| {
-                            error!("Failed to invoke `getPolicy`: {:?}", e);
+                            error!("Failed to invoke `getPolicy`: {e:?}");
                             binder_service_specific_error()
                         })?;
                     global_state.insert_policy(client_seq_num, dice_policy.to_vec())?;
@@ -140,7 +140,7 @@ impl IHelloWorld for HelloWorldService {
                     let policy_matching_result = dice_policy_matching_service
                         .matchPolicy(client_seq_num, stored_policy)
                         .map_err(|e| {
-                            error!("Failed to invoke `matchPolicy`: {:?}", e);
+                            error!("Failed to invoke `matchPolicy`: {e:?}");
                             binder_service_specific_error()
                         })?;
                     Ok(policy_matching_result)
@@ -149,7 +149,7 @@ impl IHelloWorld for HelloWorldService {
             Some(dp) => {
                 let policy_matching_result =
                     dice_policy_matching_service.matchPolicy(client_seq_num, dp).map_err(|e| {
-                        error!("Failed to invoke `matchPolicy`: {:?}", e);
+                        error!("Failed to invoke `matchPolicy`: {e:?}");
                         binder_service_specific_error()
                     })?;
                 Ok(policy_matching_result)
