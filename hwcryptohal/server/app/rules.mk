@@ -32,6 +32,7 @@ MODULE_LIBRARY_DEPS += \
 	trusty/user/app/sample/hwcryptohal/common  \
 	trusty/user/app/sample/hwcryptohal/server \
 	trusty/user/base/lib/tipc/rust \
+	trusty/user/base/lib/service_manager/client \
 	trusty/user/base/lib/trusty-sys \
 	trusty/user/base/lib/trusty-std \
 	$(call FIND_CRATE,log) \
