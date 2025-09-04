@@ -37,6 +37,6 @@ pub fn trusty_rng_add_entropy(data: &[u8]) {
     // Safety: `data` is a valid slice
     let rc = unsafe { ffi_bindings::sys::trusty_rng_add_entropy(data.as_ptr(), data.len()) };
     if rc != 0 {
-        panic!("trusty_rng_add_entropy() failed, {}", rc)
+        panic!("trusty_rng_add_entropy() failed, {rc}")
     }
 }

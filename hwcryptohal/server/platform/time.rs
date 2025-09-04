@@ -30,7 +30,7 @@ impl DeviceTime for TrustyDeviceTime {
         let rc = unsafe { trusty_sys::gettime(0, 0, &mut secure_time_ns) };
         if rc < 0 {
             // Couldn't get time
-            error!("Error calling trusty_gettime: {:#x}", rc);
+            error!("Error calling trusty_gettime: {rc:#x}");
             Err(hwcrypto_err!(GENERIC_ERROR, "error calling trusty_gettime: {:#x}", rc))
         } else {
             // secure_time_ns is positive, so casting is correct

@@ -73,7 +73,7 @@ struct BootUniqueValue([u8; UNIQUE_VALUE_SIZEOF]);
 
 impl fmt::Debug for BootUniqueValue {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "[BootUniqueValue size: {}; data redacted]", UNIQUE_VALUE_SIZEOF)
+        write!(f, "[BootUniqueValue size: {UNIQUE_VALUE_SIZEOF}; data redacted]")
     }
 }
 
