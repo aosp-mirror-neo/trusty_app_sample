@@ -27,7 +27,7 @@ use tipc::{self, ClientIdentifier, PortCfg};
 pub(crate) const NUM_IPC_QUEUES: u32 = 4;
 
 fn create_device_key_service(client_id: ClientIdentifier) -> Option<SpIBinder> {
-    let client_id_bytes = client_id.as_tagged_bytes().into_vec();
+    let client_id_bytes = client_id.c_repr().as_generic().as_bytes().to_vec();
     Some(HwCryptoKey::new_binder(client_id_bytes).as_binder())
 }
 

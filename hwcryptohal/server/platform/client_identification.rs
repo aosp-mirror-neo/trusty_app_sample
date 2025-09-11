@@ -369,7 +369,8 @@ impl TrustyClientIdentification for TrustyDiceIdentification {
 }
 
 fn get_client_id(client_id_bytes: &[u8]) -> Result<ClientIdentifier, HwCryptoError> {
-    Ok(ClientIdentifier::from_tagged_bytes(client_id_bytes)?)
+    let client_id = trusty_sys::TrustyPeerIdStorageSized::read_from_bytes(client_id_bytes);
+    Ok(ClientIdentifier::try_from_c_repr(client_id.as_generic())?)
 }
 
 fn get_uuid(client_id: ClientIdentifier) -> Result<Uuid, HwCryptoError> {

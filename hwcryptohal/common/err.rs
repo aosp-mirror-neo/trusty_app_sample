@@ -22,7 +22,7 @@ use android_hardware_security_see_hwcrypto::binder;
 use core::array::TryFromSliceError;
 use coset::CoseError;
 use std::sync::PoisonError;
-use tipc::TipcError;
+use tipc::{TipcError, ClientIdentifierError};
 use vm_memory::VolatileMemoryError;
 
 /// Macro used to create a `HwCryptoError::HalError` by providing the AIDL `HalErrorCode` and a
@@ -65,6 +65,12 @@ impl From<kmr_wire::CborError> for HwCryptoError {
 impl From<TipcError> for HwCryptoError {
     fn from(e: TipcError) -> Self {
         hwcrypto_err!(GENERIC_ERROR, "tipc communication error: {:?}", e)
+    }
+}
+
+impl From<ClientIdentifierError> for HwCryptoError {
+    fn from(e: ClientIdentifierError) -> Self {
+        hwcrypto_err!(GENERIC_ERROR, "tipc client ID error: {}", e)
     }
 }
 
