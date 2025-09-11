@@ -18,8 +18,10 @@
 
 #include <binder/RpcSession.h>
 #include <binder/RpcTransportTipcTrusty.h>
+#include <lib/tipc/tipc.h>
 #include <lib/unittest/unittest.h>
 #include <stdio.h>
+#include <trusty_ipc.h>
 #include <trusty_unittest.h>
 #include <uapi/err.h>
 
@@ -252,6 +254,51 @@ TEST_F(BinderTest, intEnumArray) {
 TEST_F(BinderTest, longEnumArray) {
     std::vector<LongEnum> longs{LongEnum::BAR, LongEnum::BAZ, LongEnum::FOO};
     CHECK_REVERSE(ReverseLongEnum, longs);
+}
+
+TEST_F(BinderTest, handover) {
+    handle_t handle = INVALID_IPC_HANDLE;
+    android::sp<android::RpcSession> sess;
+    android::binder::unique_fd chan;
+    android::status_t status;
+    android::sp<android::IBinder> root;
+    android::sp<ITestService> srv;
+    android::binder::Status call_status;
+    auto in = String16("Successfully handed over to ITestService.");
+    String16 out;
+
+    /* Connect and send a message on HND_PORT. */
+    int rc = connect(ITestService::HND_PORT().c_str(),
+                     IPC_CONNECT_WAIT_FOR_PORT);
+    ASSERT_GE(rc, 0);
+    handle = rc;
+
+    rc = tipc_send1(handle, nullptr, 0);
+    ASSERT_EQ(rc, NO_ERROR);
+
+    /* handle now connected to ITestService; check we can call it. */
+    sess = android::RpcSession::make(
+            android::RpcTransportCtxFactoryTipcTrusty::make());
+    ASSERT_NE(nullptr, sess.get());
+
+    chan.reset(handle);
+    handle = INVALID_IPC_HANDLE;
+    status = sess->setupPreconnectedClient(
+            std::move(chan), []() { return android::binder::unique_fd(); });
+    ASSERT_EQ(android::OK, status);
+
+    root = sess->getRootObject();
+    ASSERT_NE(nullptr, root.get());
+
+    srv = ITestService::asInterface(root);
+    ASSERT_NE(nullptr, srv.get());
+
+    call_status = srv->RepeatString(in, &out);
+    ASSERT_EQ(true, call_status.isOk());
+    EXPECT_EQ(in == out, true);
+
+test_abort:;
+    close(handle);
 }
 
 PORT_TEST(memref, "com.android.trusty.binder.test")

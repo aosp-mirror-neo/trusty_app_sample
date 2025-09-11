@@ -18,7 +18,9 @@
 
 #include <binder_test_consts.h>
 #include <inttypes.h>
+#include <lib/tipc/peer_id.h>
 #include <lib/tipc/tipc.h>
+#include <lib/tipc/tipc_srv.h>
 #include <lk/err_ptr.h>
 #include <stdio.h>
 #include <sys/mman.h>
@@ -28,12 +30,15 @@
 
 #include <vector>
 
+#include <binder/ParcelFileDescriptor.h>
 #include <binder/RpcServerTrusty.h>
 
 #include <com/android/trusty/binder/test/BnTestService.h>
 
 using android::String16;
 using android::binder::Status;
+using android::binder::unique_fd;
+using android::os::ParcelFileDescriptor;
 
 using com::android::trusty::binder::test::BnTestService;
 using com::android::trusty::binder::test::ByteEnum;
@@ -45,7 +50,7 @@ template <typename T>
 Status ReverseArray(const std::vector<T>& input,
                     std::vector<T>* repeated,
                     std::vector<T>* _aidl_return) {
-    TLOGI("Reversing array of length %zu\n", input.size());
+    TLOGD("Reversing array of length %zu\n", input.size());
     *repeated = input;
     *_aidl_return = input;
     std::reverse(_aidl_return->begin(), _aidl_return->end());
@@ -54,6 +59,15 @@ Status ReverseArray(const std::vector<T>& input,
 
 class TestService : public BnTestService {
 public:
+    static android::sp<TestService> Make(
+            android::sp<android::RpcServerTrusty> srv) {
+        auto self = android::sp<TestService>::make(srv);
+        srv->setRootObject(self);
+        return self;
+    }
+
+    TestService(android::wp<android::RpcServerTrusty> srv) : srv_(srv) {}
+
     Status RepeatBoolean(bool token, bool* _aidl_return) override {
         return Repeat(token, _aidl_return);
     }
@@ -144,6 +158,32 @@ public:
                            std::vector<LongEnum>* _aidl_return) override {
         return ReverseArray(input, repeated, _aidl_return);
     }
+    Status Handover(const ParcelFileDescriptor& fd) override {
+        auto srv = srv_.promote();
+        if (srv == nullptr) {
+            return Status::fromExceptionCode(
+                    Status::EX_ILLEGAL_STATE,
+                    "RpcServer destroyed before the service running on it.");
+        }
+
+        handle_t dup_fd = dup(fd.get());
+        if (dup_fd == -1) {
+            return Status::fromExceptionCode(
+                    Status::EX_ILLEGAL_STATE,
+                    "Could not dup incoming ParcelFileDescriptor.");
+        }
+
+        struct trusty_peer_id_sequence_id client = {
+                .kind = TRUSTY_PEER_ID_KIND_SEQUENCE_ID,
+                .id = 0,
+        };
+
+        android::status_t rc = srv->queueConnect(
+                unique_fd(dup_fd),
+                reinterpret_cast<const trusty_peer_id&>(client),
+                sizeof(client));
+        return Status::fromStatusT(rc);
+    }
 
 private:
     template <typename T>
@@ -151,6 +191,8 @@ private:
         *out = in;
         return Status::ok();
     }
+
+    android::wp<android::RpcServerTrusty> srv_;
 };
 
 int main(void) {
@@ -177,8 +219,10 @@ int main(void) {
         return EXIT_FAILURE;
     }
 
-    android::sp<TestService> test_srv = android::sp<TestService>::make();
-    srv->setRootObject(test_srv);
+    android::sp<TestService> test_srv = TestService::Make(srv);
+    if (test_srv == nullptr) {
+        return EXIT_FAILURE;
+    }
 
     return tipc_run_event_loop(hset);
 }
