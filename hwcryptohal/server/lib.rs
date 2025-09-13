@@ -21,9 +21,8 @@
 #![cfg_attr(not(version("1.77")), feature(c_str_literals))]
 #![cfg_attr(version("1.86"), allow(clippy::doc_overindented_list_items))]
 
-pub const HANDOVER_SERVICE_PORT: &str =
-    "IHandover/android.hardware.security.see.hwcrypto.IHwCryptoKey/default";
-pub const RUST_SERVICE_PORT: &std::ffi::CStr = c"com.android.trusty.rust.hwcryptohal.V1";
+pub const HWCRYPTO_SERVICE_NAME: &str =
+    "android.hardware.security.see.hwcrypto.IHwCryptoKey/default";
 
 mod cmd_processing;
 mod crypto_operation;

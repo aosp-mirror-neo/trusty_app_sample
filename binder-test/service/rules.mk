@@ -25,10 +25,10 @@ MODULE_SRCS += \
 	$(LOCAL_DIR)/main.cpp \
 
 MODULE_LIBRARY_DEPS += \
+	frameworks/native/libs/binder/trusty \
+	system/core/trusty/test/binder/aidl \
 	trusty/user/base/lib/libc-trusty \
 	trusty/user/base/lib/libstdc++-trusty \
 	trusty/user/base/lib/tipc \
-	frameworks/native/libs/binder/trusty \
-	system/core/trusty/test/binder/aidl \
 
 include make/trusted_app.mk

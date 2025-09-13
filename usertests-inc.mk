@@ -18,6 +18,7 @@ include trusty/user/app/sample/stats-test/usertests-inc.mk
 TRUSTY_USER_TESTS += \
 	trusty/user/app/sample/app-mgmt-test/client\
 	trusty/user/app/sample/binder-test/client \
+	trusty/user/app/sample/binder-test/handover \
 	trusty/user/app/sample/binder-test/service \
 	trusty/user/app/sample/hwcrypto-unittest \
 	trusty/user/app/sample/hwrng-unittest \
