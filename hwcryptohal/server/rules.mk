@@ -28,6 +28,7 @@ MODULE_LIBRARY_DEPS += \
 	frameworks/native/libs/binder/trusty/rust \
 	trusty/user/app/sample/hwcryptohal/aidl/rust  \
 	trusty/user/app/sample/hwcryptohal/common  \
+	trusty/user/base/interface/shared_secret/aidl \
 	trusty/user/app/sample/hwcryptohal/server/interfaces \
 	trusty/user/app/sample/hwcryptohal/server/platform \
 	trusty/user/base/lib/keymint-rust/boringssl \

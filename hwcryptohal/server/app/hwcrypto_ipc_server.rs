@@ -18,7 +18,7 @@
 use authmgr_be_lib::{default_handover_port_config, HandoverService};
 use binder::SpIBinder;
 use hwcryptohal_common::{err::HwCryptoError, hwcrypto_err};
-use hwcryptohalserver::HwCryptoKey;
+use hwcryptohalserver::{HwCryptoKey, SharedSecret};
 use rpcbinder::RpcServer;
 use service_manager::service_name_to_trusty_port;
 use std::sync::Arc;
@@ -56,6 +56,24 @@ fn hwcryptohal_port_cfg() -> Result<PortCfg, HwCryptoError> {
     .allow_ns_connect())
 }
 
+fn hwcrypto_shared_secret_port_cfg() -> Result<PortCfg, HwCryptoError> {
+    Ok(PortCfg::new(
+        hwcryptohalserver::SHARED_SECRET_SERVICE_PORT
+            .to_str()
+            .expect("should not happen, valid utf-8"),
+    )
+    .map_err(|e| {
+        hwcrypto_err!(
+            GENERIC_ERROR,
+            "could not create port config for {:?}: {:?}",
+            hwcryptohalserver::SHARED_SECRET_SERVICE_PORT,
+            e
+        )
+    })?
+    .msg_queue_len(NUM_IPC_QUEUES)
+    .allow_ns_connect())
+}
+
 pub fn main_loop() -> Result<(), HwCryptoError> {
     let hwdk_rpc_server = Arc::new(RpcServer::new_per_session(create_device_key_service));
     let hwdk_cfg = hwcryptohal_port_cfg()?;
@@ -65,6 +83,15 @@ pub fn main_loop() -> Result<(), HwCryptoError> {
     // removed from the set
     let _port_wrapper_hw_crypto =
         handle_set_wrapper.add_port(&hwdk_cfg, hwdk_rpc_server.clone())?;
+
+    let shared_secret_binder = SharedSecret::new_binder();
+    let shared_secret = Arc::new(RpcServer::new(shared_secret_binder.as_binder()));
+    let shared_secret_cfg = hwcrypto_shared_secret_port_cfg()?;
+
+    // keeping a reference to `_port_wrapper_shared_secret` is necessary for the service not to be
+    // removed from the set
+    let _port_wrapper_shared_secret =
+        handle_set_wrapper.add_port(&shared_secret_cfg, shared_secret)?;
 
     let handle_set_wrapper_for_cb = Arc::clone(&handle_set_wrapper);
 

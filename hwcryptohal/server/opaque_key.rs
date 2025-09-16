@@ -776,15 +776,15 @@ impl AsCborValue for OpaqueKey {
 }
 
 impl OpaqueKey {
-    pub(crate) fn new_binder(
+    pub(crate) fn new_with_exportable_key(
         policy: &KeyPolicy,
         key_material: KeyMaterial,
         client_conn_id: &[u8],
     ) -> binder::Result<binder::Strong<dyn IOpaqueKey>> {
-        Self::new_binder_with_options(policy, key_material, client_conn_id, true)
+        Self::new_binder(policy, key_material, client_conn_id, true)
     }
 
-    pub(crate) fn new_binder_with_options(
+    fn new_binder(
         policy: &KeyPolicy,
         key_material: KeyMaterial,
         client_conn_id: &[u8],
@@ -806,12 +806,12 @@ impl OpaqueKey {
         Ok(opaque_keybinder)
     }
 
-    pub(crate) fn new_unexportable(
+    pub(crate) fn new_with_unexportable_key(
         policy: &KeyPolicy,
         key_material: KeyMaterial,
         client_conn_id: &[u8],
     ) -> binder::Result<binder::Strong<dyn IOpaqueKey>> {
-        Self::new_binder_with_options(policy, key_material, client_conn_id, false)
+        Self::new_binder(policy, key_material, client_conn_id, false)
     }
 
     fn check_clear_import_policy(policy: &KeyPolicy) -> Result<(), HwCryptoError> {
@@ -831,7 +831,7 @@ impl OpaqueKey {
     ) -> binder::Result<binder::Strong<dyn IOpaqueKey>> {
         check_key_material_with_policy(&key_material, policy)?;
         Self::check_clear_import_policy(policy)?;
-        Self::new_binder(policy, key_material, client_conn_id)
+        Self::new_with_exportable_key(policy, key_material, client_conn_id)
     }
 
     fn check_ownership(&self) -> bool {
@@ -939,7 +939,7 @@ impl OpaqueKey {
         client_conn_id: &[u8],
     ) -> binder::Result<binder::Strong<dyn IOpaqueKey>> {
         let key_material = generate_key_material(&policy.keyType, None)?;
-        OpaqueKey::new_binder(policy, key_material, client_conn_id)
+        OpaqueKey::new_with_exportable_key(policy, key_material, client_conn_id)
     }
 
     fn try_clone(&self) -> Result<Self, HwCryptoError> {
@@ -968,7 +968,7 @@ impl OpaqueKey {
         client_conn_id: &[u8],
     ) -> binder::Result<binder::Strong<dyn IOpaqueKey>> {
         let key_material = generate_key_material(&policy.keyType, Some(key_material))?;
-        OpaqueKey::new_binder(policy, key_material, client_conn_id)
+        OpaqueKey::new_with_exportable_key(policy, key_material, client_conn_id)
     }
 
     pub(crate) fn check_key_derivation_parameters(

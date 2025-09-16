@@ -23,6 +23,9 @@
 
 pub const HWCRYPTO_SERVICE_NAME: &str =
     "android.hardware.security.see.hwcrypto.IHwCryptoKey/default";
+/// Port where we serve HwCrypto shared secret service participant
+pub const SHARED_SECRET_SERVICE_PORT: &std::ffi::CStr =
+    c"android.hardware.security.hwcrypto.sharedsecret/default.bnd";
 
 mod cmd_processing;
 mod crypto_operation;
@@ -31,9 +34,11 @@ mod helpers;
 mod hwcrypto_device_key;
 mod hwcrypto_operations;
 mod opaque_key;
+mod secret;
 mod service_encryption_key;
 
 pub use hwcrypto_device_key::HwCryptoKey;
+pub use secret::SharedSecret;
 
 use hwcryptohalinterfaces::{ClientIdentification, DeviceKeys, DeviceTime, MemoryMappedObject};
 use hwcryptohalplatform::{

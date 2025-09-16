@@ -876,6 +876,11 @@ static const struct hwkey_keyslot _keys[] = {
                 .key_id = KM_KAK_ID,
                 .handler = get_km_kak_key,
         },
+        {
+                .uuid = &hwcryptohal_rust_uuid,
+                .key_id = KM_KAK_ID,
+                .handler = get_km_kak_key,
+        },
 #if TEST_BUILD
         {
                 .uuid = &km_rust_unittest_uuid,

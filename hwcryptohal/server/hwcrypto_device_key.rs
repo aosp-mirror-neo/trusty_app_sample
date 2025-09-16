@@ -238,8 +238,12 @@ impl HwCryptoKey {
                 };
                 // Create a new opaque key from the generated key material
                 let km = opaque_key::generate_key_material(&policy.keyType, Some(derived_key))?;
-                let key = opaque_key::OpaqueKey::new_binder(&policy, km, self.client_id.as_slice())
-                    .map_err(|e| hwcrypto_err!(GENERIC_ERROR, "failed to create key {:?}", e))?;
+                let key = opaque_key::OpaqueKey::new_with_exportable_key(
+                    &policy,
+                    km,
+                    self.client_id.as_slice(),
+                )
+                .map_err(|e| hwcrypto_err!(GENERIC_ERROR, "failed to create key {:?}", e))?;
                 Ok(DiceBoundKeyResult {
                     diceBoundKey: Some(key),
                     dicePolicyWasCurrent: policy_is_current,
@@ -399,7 +403,7 @@ impl IHwCryptoKey for HwCryptoKey {
                     keyManagementKey: false,
                 };
                 let hmac_key = DeviceKeysImpl::get_keymint_shared_hmac_key(&policy)?.0;
-                OpaqueKey::new_unexportable(
+                OpaqueKey::new_with_unexportable_key(
                     &policy,
                     KeyMaterial::Hmac(hmac_key),
                     self.client_id.as_slice(),
