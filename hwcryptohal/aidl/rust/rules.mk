@@ -17,7 +17,10 @@ LOCAL_DIR := $(GET_LOCAL_DIR)
 
 MODULE := $(LOCAL_DIR)
 
-HWCRYPTO_AIDL_DIR = hardware/interfaces/security/see/hwcrypto/aidl
+MODULE_AIDL_STABLE := true
+MODULE_AIDL_VERSION := 1
+
+HWCRYPTO_AIDL_DIR = hardware/interfaces/security/see/hwcrypto/aidl/aidl_api/android.hardware.security.see.hwcrypto/$(MODULE_AIDL_VERSION)
 
 MODULE_CRATE_NAME := android_hardware_security_see_hwcrypto
 
@@ -30,8 +33,6 @@ MODULE_AIDL_INCLUDES := \
 
 MODULE_AIDL_FLAGS := \
 	--stability=vintf \
-
-MODULE_AIDL_FLAGS += --version=1
 
 MODULE_AIDLS := \
     $(HWCRYPTO_AIDL_DIR)/$(MODULE_AIDL_PACKAGE)/CryptoOperation.aidl                        \
