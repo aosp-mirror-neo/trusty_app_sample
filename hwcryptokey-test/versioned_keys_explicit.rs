@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 #[cfg(test)]
-mod tests {
+mod hwcryptokey_tests {
     use android_hardware_security_see_hwcrypto::aidl::android::hardware::security::see::hwcrypto::{
         IHwCryptoKey::{
             DerivedKey::DerivedKey, DerivedKeyParameters::DerivedKeyParameters,
