@@ -34,6 +34,12 @@ MODULE_LIBRARY_DEPS += \
 	trusty/user/base/lib/trusty-std \
 	$(call FIND_CRATE,log) \
 
+
+ifeq (true,$(call TOBOOL,$(HWCRYPTO_EXCLUDE_SYMMETRIC_OPERATION_TESTS)))
+MODULE_RUSTFLAGS += --cfg 'feature="exclude_symmetric_operation_tests"'
+
+endif
+
 MODULE_RUST_TESTS := true
 
 include make/library.mk

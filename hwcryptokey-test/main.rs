@@ -14,10 +14,8 @@
  * limitations under the License.
  */
 
-mod aes_vectors;
-mod functional;
-mod versioned_keys_explicit;
-mod versioned_keys_opaque;
+#[cfg(test)]
+mod hwcryptokey_vts;
 
 #[cfg(test)]
 mod tests {
