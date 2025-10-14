@@ -26,6 +26,7 @@ use hwcryptohalinterfaces::{ClientIdentification, ClientPolicyCheck, DeviceKeys}
 use log::error;
 use tipc::{ClientIdentifier, Uuid};
 
+use crate::allowed_connections;
 use crate::device_keys::bytes_to_version;
 
 // enum values do not have a special meaning. HwCryptoHal server project uses for enums values above
@@ -357,10 +358,37 @@ impl TrustyClientIdentification for TrustyDiceIdentification {
     fn client_can_access_keyslot(
         &self,
         client_id: ClientIdentifier,
-        _key_slot: KeySlot,
+        key_slot: KeySlot,
     ) -> Result<bool, HwCryptoError> {
-        let _seq_num = get_client_seq_number(client_id)?;
-        unimplemented!("client_can_access_keyslot not implemented for TrustyDiceIdentification")
+        let service = get_dice_policy_matching_service()?;
+        let seq_num = get_client_seq_number(client_id)?;
+        let client_metadata = service.getClientMetaData(seq_num).map_err(|e| {
+            error!("Couldn't get client metadata: {e:?}, sequence number: {seq_num}");
+            hwcrypto_err!(GENERIC_ERROR, "couldn't get client metadata {:?}", e)
+        })?;
+        let mut match_found = false;
+        for allowed_connection in allowed_connections::get_allowed_connections(key_slot)? {
+            if client_metadata.instanceIdentifier == allowed_connection.instance_id {
+                // We found the VM in our list of allowed clients
+                match allowed_connection.client_ids {
+                    Some(client_ids) => {
+                        for ta_id in client_ids {
+                            if client_metadata.clientIdentifier == ta_id {
+                                // found a corresponding Instance ID, TA UUID
+                                match_found = true;
+                                break;
+                            }
+                        }
+                    }
+                    // If we don't get a list of client IDs, all TAs inside the VM are allowed
+                    None => match_found = true,
+                }
+                // We have finished checking all clients on this VM. We only expect a single entry
+                // for each VM, so we will exit the external for loop here
+                break;
+            }
+        }
+        Ok(match_found)
     }
 
     fn get_policy_tag(&self) -> ClientPolicyCoseLabels {

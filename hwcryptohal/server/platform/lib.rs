@@ -16,6 +16,7 @@
 
 //! library implementing platform specific functions.
 
+mod allowed_connections;
 mod client_identification;
 mod device_keys;
 mod ffi_bindings;
