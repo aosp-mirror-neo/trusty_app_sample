@@ -28,8 +28,11 @@ use android_hardware_security_see_hwcrypto::aidl::android::hardware::security::s
     },
     KeyPolicy::KeyPolicy,
 };
+use ciborium::Value;
+use coset::CborSerializable;
 use hwcryptohal_common::policy::cbor_serialize_key_policy;
-use test::{assert_ok, expect};
+use kmr_common::crypto::Hkdf;
+use test::{assert_ok, expect, expect_eq};
 
 use crate::tests::get_hwcryptokey;
 
@@ -532,4 +535,115 @@ fn try_derive_key_wrong_key_purpose() {
     params.keyPolicy = derived_policy;
     let derived_key_result = hw_crypto_key.deriveKey(&params);
     expect!(derived_key_result.is_err(), "should not be able to derive a key with a signing key");
+}
+
+#[test]
+fn valid_clear_key_derivation() {
+    const CLEAR_KEY_DERIVATION_CONTEXT_PREFIX: u8 = 3;
+    let hw_crypto_key = assert_ok!(get_hwcryptokey(), "couldn't retrieve hw crypto binder");
+    let derivation_key = [0; HMAC_SHA256_KEY_LEN];
+    let clear_key = ExplicitKeyMaterial::Hmac(HmacKey::Sha256(derivation_key));
+    let policy = KeyPolicy {
+        usage: KeyUse::DERIVE,
+        keyLifetime: KeyLifetime::PORTABLE,
+        keyPermissions: Vec::new(),
+        keyManagementKey: false,
+        keyType: KeyType::HMAC_SHA256,
+    };
+    let derivation_context = b"context";
+    let key_size = 5u64;
+    let key =
+        assert_ok!(hw_crypto_key.importClearKey(&clear_key, &policy), "couldn't import clear key");
+    let derived_policy =
+        DerivedKeyPolicy::ClearKeyPolicy(ClearKeyPolicy { keySizeBytes: key_size as i32 });
+    let params = DerivedKeyParameters {
+        derivationKey: Some(key),
+        keyPolicy: derived_policy,
+        context: derivation_context.to_vec(),
+    };
+    let derived_key = assert_ok!(hw_crypto_key.deriveKey(&params));
+    let DerivedKey::ExplicitKey(derived_key) = derived_key else {
+        panic!("shouldn't have recovered an opaque key");
+    };
+    // Manually deriving the same clear key
+    let mut key_context = Vec::<Value>::new();
+    key_context.push(Value::Integer((CLEAR_KEY_DERIVATION_CONTEXT_PREFIX).into()));
+    key_context.push(Value::Integer((key_size).into()));
+    key_context.push(Value::Bytes(derivation_context.to_vec()));
+    let context: Vec<u8> = Value::Array(key_context).to_vec().unwrap();
+    let derived_key_local = kmr_crypto_boring::hmac::BoringHmac
+        .hkdf(&[], &derivation_key, context.as_slice(), key_size as usize)
+        .unwrap();
+    expect_eq!(derived_key, derived_key_local, "derived clear key do not match expected value");
+}
+
+#[test]
+fn valid_opaque_key_derivation() {
+    const OPAQUE_KEY_DERIVATION_CONTEXT_PREFIX: u8 = 4;
+    let hw_crypto_key = assert_ok!(get_hwcryptokey(), "couldn't retrieve hw crypto binder");
+    let initial_derivation_key = [0; HMAC_SHA256_KEY_LEN];
+    let clear_key = ExplicitKeyMaterial::Hmac(HmacKey::Sha256(initial_derivation_key));
+    let policy = KeyPolicy {
+        usage: KeyUse::DERIVE,
+        keyLifetime: KeyLifetime::PORTABLE,
+        keyPermissions: Vec::new(),
+        keyManagementKey: false,
+        keyType: KeyType::HMAC_SHA256,
+    };
+    let derivation_context = b"context";
+    let key =
+        assert_ok!(hw_crypto_key.importClearKey(&clear_key, &policy), "couldn't import clear key");
+    // We will use the same key policy for the opaque derived key
+    let derived_key_policy =
+        assert_ok!(cbor_serialize_key_policy(&policy), "couldn't crete a serialized policy");
+    let derived_policy = DerivedKeyPolicy::OpaqueKey(derived_key_policy.clone());
+    let params = DerivedKeyParameters {
+        derivationKey: Some(key),
+        keyPolicy: derived_policy,
+        context: derivation_context.to_vec(),
+    };
+    let derived_key = assert_ok!(hw_crypto_key.deriveKey(&params));
+    let derived_opaque_key = if let DerivedKey::Opaque(derived_opaque_key) = derived_key {
+        derived_opaque_key
+    } else {
+        panic!("shouldn't have received a clear key");
+    };
+    // Manually deriving the same key
+    let mut key_context = Vec::<Value>::new();
+    key_context.push(Value::Integer((OPAQUE_KEY_DERIVATION_CONTEXT_PREFIX).into()));
+    key_context.push(Value::Bytes(derived_key_policy));
+    key_context.push(Value::Bytes(derivation_context.to_vec()));
+    let context: Vec<u8> = Value::Array(key_context).to_vec().unwrap();
+    let derived_key_local = kmr_crypto_boring::hmac::BoringHmac
+        .hkdf(&[], &initial_derivation_key, context.as_slice(), HMAC_SHA256_KEY_LEN)
+        .unwrap();
+
+    // To test that both opaque derived keys match, we will use them to derive clear keys and
+    // compare them
+    let key_size = 5u64;
+    let clear_key_policy =
+        DerivedKeyPolicy::ClearKeyPolicy(ClearKeyPolicy { keySizeBytes: key_size as i32 });
+    let mut params = DerivedKeyParameters {
+        derivationKey: derived_opaque_key,
+        keyPolicy: clear_key_policy,
+        context: derivation_context.to_vec(),
+    };
+    let derived_clear_key = assert_ok!(hw_crypto_key.deriveKey(&params));
+    let DerivedKey::ExplicitKey(derived_clear_key1) = derived_clear_key else {
+        panic!("shouldn't have recovered an opaque key");
+    };
+    let derived_key_local =
+        ExplicitKeyMaterial::Hmac(HmacKey::Sha256(derived_key_local.try_into().unwrap()));
+    let imported_derived_key = assert_ok!(
+        hw_crypto_key.importClearKey(&derived_key_local, &policy),
+        "couldn't import local key"
+    );
+    params.derivationKey = Some(imported_derived_key);
+    let derived_clear_key = assert_ok!(hw_crypto_key.deriveKey(&params));
+    let derived_clear_key2 = if let DerivedKey::ExplicitKey(derived_clear_key) = derived_clear_key {
+        derived_clear_key
+    } else {
+        panic!("shouldn't have recovered an opaque key");
+    };
+    expect_eq!(derived_clear_key1, derived_clear_key2, "Derived keys should have matched");
 }
