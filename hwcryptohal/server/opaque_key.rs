@@ -1042,6 +1042,7 @@ impl OpaqueKey {
         derived_key_size: usize,
     ) -> Result<Vec<u8>, HwCryptoError> {
         self.expiration_time_valid()?;
+        self.key_can_be_used_for_derivation()?;
         let op_context = DerivationContext::new(HkdfOperationType::ClearKeyDerivation)?;
         self.derive_clear_key_from_derivation_context(op_context, context, derived_key_size)
     }
@@ -1096,6 +1097,10 @@ impl OpaqueKey {
         }
     }
 
+    // checks if we can use the provided key for key derivation. Because we use HKDF for key
+    // derivation, we require that the provided key material can be used on HMAC operations.
+    // Additionally because we enforce that keys have single uses, we verify that the provided key
+    // usage is derivation.
     fn key_can_be_used_for_derivation(&self) -> Result<(), HwCryptoError> {
         match self.key_material {
             KeyMaterial::Hmac(_) => Ok(()),
