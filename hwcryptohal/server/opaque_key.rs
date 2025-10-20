@@ -21,7 +21,7 @@ use android_hardware_security_see_hwcrypto::aidl::android::hardware::security::s
     AesCipherMode::AesCipherMode, KeyLifetime::KeyLifetime, KeyPermissions::KeyPermissions,
     KeyType::KeyType, KeyUse::KeyUse, OpaqueKeyToken::OpaqueKeyToken, OperationType::OperationType,
     ProtectionId::ProtectionId, SymmetricCryptoParameters::SymmetricCryptoParameters,
-    SymmetricOperation::SymmetricOperation,
+    SymmetricOperation::SymmetricOperation, HalErrorCode,
 };
 use android_hardware_security_see_hwcrypto::aidl::android::hardware::security::see::hwcrypto::{
     IHwCryptoKey::{
@@ -1204,9 +1204,9 @@ impl IOpaqueKey for OpaqueKey {
         &self,
         _wrapping_key: &binder::Strong<dyn IOpaqueKey>,
     ) -> binder::Result<Vec<u8>> {
-        Err(binder::Status::new_exception_str(
-            binder::ExceptionCode::UNSUPPORTED_OPERATION,
-            Some("export_wrapped_key has not been implemented yet"),
+        Err(binder::Status::new_service_specific_error(
+            HalErrorCode::UNSUPPORTED,
+            Some(c"export_wrapped_key is not required"),
         ))
     }
 
@@ -1215,9 +1215,9 @@ impl IOpaqueKey for OpaqueKey {
     }
 
     fn getPublicKey(&self) -> binder::Result<Vec<u8>> {
-        Err(binder::Status::new_exception_str(
-            binder::ExceptionCode::UNSUPPORTED_OPERATION,
-            Some("get_public_key has not been implemented yet"),
+        Err(binder::Status::new_service_specific_error(
+            HalErrorCode::UNSUPPORTED,
+            Some(c"getPublicKey is not required"),
         ))
     }
 
