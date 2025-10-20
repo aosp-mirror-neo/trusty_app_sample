@@ -26,6 +26,7 @@ use hwcryptohalinterfaces::{ClientIdentification, ClientPolicyCheck, DeviceKeys}
 use log::error;
 use tipc::{ClientIdentifier, Uuid};
 
+use crate::allowed_connections;
 use crate::device_keys::bytes_to_version;
 
 // enum values do not have a special meaning. HwCryptoHal server project uses for enums values above
@@ -160,8 +161,7 @@ impl TaggedClientPolicy {
         let actual_type = self.get_tag();
         if expected_type != actual_type {
             error!(
-                "Wrong policy type received. Expected {:?}, received{:?}",
-                expected_type, actual_type
+                "Wrong policy type received. Expected {expected_type:?}, received{actual_type:?}"
             );
             return Err(hwcrypto_err!(
                 BAD_PARAMETER,
@@ -306,7 +306,7 @@ fn get_client_seq_number(client_id: ClientIdentifier) -> Result<i64, HwCryptoErr
     match client_id {
         ClientIdentifier::ClientSeqNumber(seq_number) => Ok(seq_number),
         _ => {
-            error!("Received {:?} ID instead of an uuid", client_id);
+            error!("Received {client_id:?} ID instead of an uuid");
             Err(hwcrypto_err!(
                 BAD_PARAMETER,
                 "received {:?} ID instead of client sequence number",
@@ -328,7 +328,7 @@ impl TrustyClientIdentification for TrustyDiceIdentification {
         let client_dice_policy = client_policy.get_dice_based_policy()?;
         let service_check_result =
             service.matchPolicy(seq_num, client_dice_policy).map_err(|e| {
-                error!("Couldn't check dice policy: {:?}", e);
+                error!("Couldn't check dice policy: {e:?}");
                 hwcrypto_err!(GENERIC_ERROR, "couldn't check dice policy {:?}", e)
             })?;
         let mut client_policy_check =
@@ -349,7 +349,7 @@ impl TrustyClientIdentification for TrustyDiceIdentification {
         let service = get_dice_policy_matching_service()?;
         let seq_num = get_client_seq_number(client_id)?;
         let dice_policy = service.getPolicy(seq_num).map_err(|e| {
-            error!("Couldn't get DICE policy: {:?}", e);
+            error!("Couldn't get DICE policy: {e:?}");
             hwcrypto_err!(GENERIC_ERROR, "couldn't get DICE policy {:?}", e)
         })?;
         Ok(TaggedClientPolicy::new_dice_policy(dice_policy))
@@ -358,10 +358,37 @@ impl TrustyClientIdentification for TrustyDiceIdentification {
     fn client_can_access_keyslot(
         &self,
         client_id: ClientIdentifier,
-        _key_slot: KeySlot,
+        key_slot: KeySlot,
     ) -> Result<bool, HwCryptoError> {
-        let _seq_num = get_client_seq_number(client_id)?;
-        unimplemented!("client_can_access_keyslot not implemented for TrustyDiceIdentification")
+        let service = get_dice_policy_matching_service()?;
+        let seq_num = get_client_seq_number(client_id)?;
+        let client_metadata = service.getClientMetaData(seq_num).map_err(|e| {
+            error!("Couldn't get client metadata: {e:?}, sequence number: {seq_num}");
+            hwcrypto_err!(GENERIC_ERROR, "couldn't get client metadata {:?}", e)
+        })?;
+        let mut match_found = false;
+        for allowed_connection in allowed_connections::get_allowed_connections(key_slot)? {
+            if client_metadata.instanceIdentifier == allowed_connection.instance_id {
+                // We found the VM in our list of allowed clients
+                match allowed_connection.client_ids {
+                    Some(client_ids) => {
+                        for ta_id in client_ids {
+                            if client_metadata.clientIdentifier == ta_id {
+                                // found a corresponding Instance ID, TA UUID
+                                match_found = true;
+                                break;
+                            }
+                        }
+                    }
+                    // If we don't get a list of client IDs, all TAs inside the VM are allowed
+                    None => match_found = true,
+                }
+                // We have finished checking all clients on this VM. We only expect a single entry
+                // for each VM, so we will exit the external for loop here
+                break;
+            }
+        }
+        Ok(match_found)
     }
 
     fn get_policy_tag(&self) -> ClientPolicyCoseLabels {
@@ -370,14 +397,15 @@ impl TrustyClientIdentification for TrustyDiceIdentification {
 }
 
 fn get_client_id(client_id_bytes: &[u8]) -> Result<ClientIdentifier, HwCryptoError> {
-    Ok(ClientIdentifier::from_tagged_bytes(client_id_bytes)?)
+    let client_id = trusty_sys::TrustyPeerIdStorageSized::read_from_bytes(client_id_bytes);
+    Ok(ClientIdentifier::try_from_c_repr(client_id.as_generic())?)
 }
 
 fn get_uuid(client_id: ClientIdentifier) -> Result<Uuid, HwCryptoError> {
     match client_id {
         ClientIdentifier::UUID(uuid) => Ok(uuid),
         _ => {
-            error!("Received {:?} ID instead of an uuid", client_id);
+            error!("Received {client_id:?} ID instead of an uuid");
             Err(hwcrypto_err!(BAD_PARAMETER, "received {:?} ID instead of an uuid", client_id))
         }
     }
@@ -393,6 +421,7 @@ fn get_client_identifier(
         ClientIdentifier::VMID(_) => {
             Err(hwcrypto_err!(BAD_PARAMETER, "VMIDs not supported for identification"))
         }
+        _ => Err(hwcrypto_err!(BAD_PARAMETER, "Unsupported ClientIdentifier type")),
     }
 }
 

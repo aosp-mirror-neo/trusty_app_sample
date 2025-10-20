@@ -1,0 +1,11 @@
+{
+    "header": "binder_test_consts.h",
+    "constants": [
+        {
+            "name": "TEST_SRV_BINDER_TIPC_QUEUE_LEN",
+            "value": "1",
+            "type": "int",
+            "unsigned": true
+        }
+    ]
+}

@@ -1,0 +1,6 @@
+{
+    "uuid": "1550e80a-5205-439c-8bf0-ddd0db8ee85e",
+    "app_name": "binder-test-handover-service",
+    "min_heap": 65536,
+    "min_stack": 16384
+}

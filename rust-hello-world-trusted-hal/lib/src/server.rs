@@ -37,7 +37,7 @@ pub const HELLO_WORLD_TRUSTED_SERVICE_PORT: &str = "android.trusty.IHelloWorld/d
 fn hello_service_port_cfg() -> Result<PortCfg, TipcError> {
     let hello_service_port_cfg = PortCfg::new_raw(
         service_name_to_trusty_c_port(HELLO_WORLD_TRUSTED_SERVICE_PORT).map_err(|e| {
-            error!("Failed to construct the hello service port name: {:?}", e);
+            error!("Failed to construct the hello service port name: {e:?}");
             TipcError::UnknownError
         })?,
     )

@@ -22,7 +22,7 @@ use android_hardware_security_see_hwcrypto::binder;
 use core::array::TryFromSliceError;
 use coset::CoseError;
 use std::sync::PoisonError;
-use tipc::TipcError;
+use tipc::{TipcError, ClientIdentifierError};
 use vm_memory::VolatileMemoryError;
 
 /// Macro used to create a `HwCryptoError::HalError` by providing the AIDL `HalErrorCode` and a
@@ -58,42 +58,55 @@ impl HwCryptoError {
 
 impl From<kmr_wire::CborError> for HwCryptoError {
     fn from(e: kmr_wire::CborError) -> Self {
+        log::error!("Received a Keymint CborError: {:?}", e);
         HwCryptoError::CborError(e)
     }
 }
 
 impl From<TipcError> for HwCryptoError {
     fn from(e: TipcError) -> Self {
+        log::error!("Received a Tipc Error: {:?}", e);
         hwcrypto_err!(GENERIC_ERROR, "tipc communication error: {:?}", e)
+    }
+}
+
+impl From<ClientIdentifierError> for HwCryptoError {
+    fn from(e: ClientIdentifierError) -> Self {
+        hwcrypto_err!(GENERIC_ERROR, "tipc client ID error: {}", e)
     }
 }
 
 impl From<kmr_common::Error> for HwCryptoError {
     fn from(e: kmr_common::Error) -> Self {
+        log::error!("Received a KeyMint Common Error: {:?}", e);
         HwCryptoError::KmError(e)
     }
 }
 
 impl From<CoseError> for HwCryptoError {
     fn from(e: CoseError) -> Self {
+        log::error!("Received a COSE Error: {:?}", e);
         hwcrypto_err!(SERIALIZATION_ERROR, "Deserialization error: {}", e)
     }
 }
 
 impl From<TryReserveError> for HwCryptoError {
     fn from(e: TryReserveError) -> Self {
+        log::error!("Received a memory allocation Error: {:?}", e);
         hwcrypto_err!(ALLOCATION_ERROR, "error allocating: {}", e)
     }
 }
 
 impl From<VolatileMemoryError> for HwCryptoError {
     fn from(e: VolatileMemoryError) -> Self {
+        log::error!("Received a volatile slice error: {:?}", e);
         hwcrypto_err!(BAD_PARAMETER, "memory buffer slice error: {}", e)
     }
 }
 
 impl From<TryFromSliceError> for HwCryptoError {
     fn from(e: TryFromSliceError) -> Self {
+        log::error!("Received an error allocating from slice: {:?}", e);
         hwcrypto_err!(ALLOCATION_ERROR, "error allocating from slice: {}", e)
     }
 }
@@ -125,7 +138,8 @@ impl From<HwCryptoError> for binder::Status {
 }
 
 impl<T> From<PoisonError<T>> for HwCryptoError {
-    fn from(_: PoisonError<T>) -> Self {
+    fn from(e: PoisonError<T>) -> Self {
+        log::error!("Received an error froma  poisoned mutex: {:?}", e);
         hwcrypto_err!(
             GENERIC_ERROR,
             "found PoisonError which shouldn't happen, we are single threaded"

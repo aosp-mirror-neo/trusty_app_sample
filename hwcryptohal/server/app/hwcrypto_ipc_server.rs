@@ -18,8 +18,9 @@
 use authmgr_be_lib::{default_handover_port_config, HandoverService};
 use binder::SpIBinder;
 use hwcryptohal_common::{err::HwCryptoError, hwcrypto_err};
-use hwcryptohalserver::HwCryptoKey;
+use hwcryptohalserver::{HwCryptoKey, SharedSecret};
 use rpcbinder::RpcServer;
+use service_manager::service_name_to_trusty_port;
 use std::sync::Arc;
 use tipc::raw::{EventLoop, HandleSetWrapper};
 use tipc::{self, ClientIdentifier, PortCfg};
@@ -27,24 +28,49 @@ use tipc::{self, ClientIdentifier, PortCfg};
 pub(crate) const NUM_IPC_QUEUES: u32 = 4;
 
 fn create_device_key_service(client_id: ClientIdentifier) -> Option<SpIBinder> {
-    let client_id_bytes = client_id.as_tagged_bytes().into_vec();
+    let client_id_bytes = client_id.c_repr().as_generic().as_bytes().to_vec();
     Some(HwCryptoKey::new_binder(client_id_bytes).as_binder())
 }
 
 fn hwcryptohal_port_cfg() -> Result<PortCfg, HwCryptoError> {
     Ok(PortCfg::new(
-        hwcryptohalserver::RUST_SERVICE_PORT.to_str().expect("should not happen, valid utf-8"),
+        service_name_to_trusty_port(hwcryptohalserver::HWCRYPTO_SERVICE_NAME).map_err(|e| {
+            hwcrypto_err!(
+                GENERIC_ERROR,
+                "could not get port name {:?}: {:?}",
+                hwcryptohalserver::HWCRYPTO_SERVICE_NAME,
+                e
+            )
+        })?,
     )
     .map_err(|e| {
         hwcrypto_err!(
             GENERIC_ERROR,
-            "could not create port config for {:?}: {:?}",
-            hwcryptohalserver::RUST_SERVICE_PORT,
+            "could not create port config for service {:?}: {:?}",
+            hwcryptohalserver::HWCRYPTO_SERVICE_NAME,
             e
         )
     })?
     .msg_queue_len(NUM_IPC_QUEUES)
     .allow_ta_connect()
+    .allow_ns_connect())
+}
+
+fn hwcrypto_shared_secret_port_cfg() -> Result<PortCfg, HwCryptoError> {
+    Ok(PortCfg::new(
+        hwcryptohalserver::SHARED_SECRET_SERVICE_PORT
+            .to_str()
+            .expect("should not happen, valid utf-8"),
+    )
+    .map_err(|e| {
+        hwcrypto_err!(
+            GENERIC_ERROR,
+            "could not create port config for {:?}: {:?}",
+            hwcryptohalserver::SHARED_SECRET_SERVICE_PORT,
+            e
+        )
+    })?
+    .msg_queue_len(NUM_IPC_QUEUES)
     .allow_ns_connect())
 }
 
@@ -57,6 +83,15 @@ pub fn main_loop() -> Result<(), HwCryptoError> {
     // removed from the set
     let _port_wrapper_hw_crypto =
         handle_set_wrapper.add_port(&hwdk_cfg, hwdk_rpc_server.clone())?;
+
+    let shared_secret_binder = SharedSecret::new_binder();
+    let shared_secret = Arc::new(RpcServer::new(shared_secret_binder.as_binder()));
+    let shared_secret_cfg = hwcrypto_shared_secret_port_cfg()?;
+
+    // keeping a reference to `_port_wrapper_shared_secret` is necessary for the service not to be
+    // removed from the set
+    let _port_wrapper_shared_secret =
+        handle_set_wrapper.add_port(&shared_secret_cfg, shared_secret)?;
 
     let handle_set_wrapper_for_cb = Arc::clone(&handle_set_wrapper);
 
@@ -73,13 +108,14 @@ pub fn main_loop() -> Result<(), HwCryptoError> {
     };
 
     let handover_rpc_service = Arc::new(RpcServer::new_per_session(handover_cb_per_session));
-
-    let handover_service_port_cfg =
-        default_handover_port_config(hwcryptohalserver::HANDOVER_SERVICE_PORT).map_err(|e| {
+    let handover_rpc_service_name =
+        format!("IHandover/{}", hwcryptohalserver::HWCRYPTO_SERVICE_NAME);
+    let handover_service_port_cfg = default_handover_port_config(&handover_rpc_service_name)
+        .map_err(|e| {
             hwcrypto_err!(
                 GENERIC_ERROR,
-                "could not create port config for {:?}: {:?}",
-                hwcryptohalserver::HANDOVER_SERVICE_PORT,
+                "could not create port config for service {:?}: {:?}",
+                handover_rpc_service_name,
                 e
             )
         })?;

@@ -14,9 +14,21 @@
  * limitations under the License.
  */
 
-mod aes_vectors;
+#[cfg(test)]
+mod hwcryptokey_vts;
 
 #[cfg(test)]
 mod tests {
     test::init!();
+
+    use android_hardware_security_see_hwcrypto::aidl::android::hardware::security::see::hwcrypto::IHwCryptoKey::IHwCryptoKey;
+    use binder::{StatusCode, Strong};
+    use service_manager::wait_for_interface;
+
+    const RUST_HWCRYPTO_SERVICE: &str =
+        "android.hardware.security.see.hwcrypto.IHwCryptoKey/default";
+
+    pub(crate) fn get_hwcryptokey() -> Result<Strong<dyn IHwCryptoKey>, StatusCode> {
+        wait_for_interface(RUST_HWCRYPTO_SERVICE)
+    }
 }

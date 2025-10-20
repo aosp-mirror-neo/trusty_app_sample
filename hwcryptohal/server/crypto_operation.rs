@@ -96,14 +96,6 @@ pub(crate) trait ICryptographicOperation: Send {
 
     fn is_valid(&self) -> bool;
 
-    #[allow(dead_code)]
-    fn update_aad(&mut self, _input: &DataToProcess) -> Result<(), HwCryptoError> {
-        Err(hwcrypto_err!(
-            BAD_PARAMETER,
-            "update aad only valid for authenticated symmetric operations"
-        ))
-    }
-
     fn set_operation_pattern(
         &mut self,
         _patter_parameter: &PatternParameters,
@@ -128,13 +120,6 @@ trait IBaseCryptoOperation: Send {
     fn is_active(&self) -> bool;
 
     fn is_valid(&self) -> bool;
-
-    fn update_aad(&mut self, _input: &DataToProcess) -> Result<(), HwCryptoError> {
-        Err(hwcrypto_err!(
-            BAD_PARAMETER,
-            "update aad only valid for authenticated symmetric operations"
-        ))
-    }
 
     fn set_operation_pattern(
         &mut self,
@@ -178,10 +163,6 @@ impl<T: IBaseCryptoOperation> ICryptographicOperation for T {
 
     fn is_valid(&self) -> bool {
         self.is_valid()
-    }
-
-    fn update_aad(&mut self, input: &DataToProcess) -> Result<(), HwCryptoError> {
-        self.update_aad(input)
     }
 
     fn set_operation_pattern(
@@ -538,10 +519,6 @@ impl IBaseCryptoOperation for AesOperation {
         self.remaining_unaligned_data_size = 0;
         self.operation_started = false;
         Ok(output_len)
-    }
-
-    fn update_aad(&mut self, _input: &DataToProcess) -> Result<(), HwCryptoError> {
-        unimplemented!("GCM AES note supported yet");
     }
 
     fn get_req_size_finish(&self) -> Result<usize, HwCryptoError> {

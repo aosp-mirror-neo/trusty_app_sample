@@ -73,7 +73,7 @@ struct BootUniqueValue([u8; UNIQUE_VALUE_SIZEOF]);
 
 impl fmt::Debug for BootUniqueValue {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "[BootUniqueValue size: {}; data redacted]", UNIQUE_VALUE_SIZEOF)
+        write!(f, "[BootUniqueValue size: {UNIQUE_VALUE_SIZEOF}; data redacted]")
     }
 }
 
@@ -654,9 +654,19 @@ fn get_dice_sealing_key_derivation_context() -> Result<Vec<u8>, HwCryptoError> {
 
 /// `IOpaqueKey` implementation.
 pub struct OpaqueKey {
+    // Extra information needed to know the specific characteristics of the key and how can it be
+    // used.
     pub(crate) key_header: KeyHeader,
+    // Raw Key material. It uses the same types that KM does.
     pub(crate) key_material: KeyMaterial,
-    pub(crate) key_in_owner_control: bool,
+    // Currently HwCrypto has 2 levels of functionality for a key. A client that creates a key have
+    // full ownership of the key and can perform any operation it desires on it. Because key can
+    // also be exported, we have a second level; which is used by importer of the key. At this level
+    // the recipient can only use the key. We envisioned that a more granular control of the key
+    // might be needed in the future, but this covers the current use cases.
+    key_in_owner_control: bool,
+    // client ID of the current holder of the key. Currently it is only used to export keys and is
+    // set to None for imported keys (imported keys cannot be re-exported by the recipient).
     client_id: Option<Vec<u8>>,
 }
 
@@ -766,27 +776,42 @@ impl AsCborValue for OpaqueKey {
 }
 
 impl OpaqueKey {
-    pub(crate) fn new_binder(
+    pub(crate) fn new_with_exportable_key(
         policy: &KeyPolicy,
         key_material: KeyMaterial,
         client_conn_id: &[u8],
     ) -> binder::Result<binder::Strong<dyn IOpaqueKey>> {
+        Self::new_binder(policy, key_material, client_conn_id, true)
+    }
+
+    fn new_binder(
+        policy: &KeyPolicy,
+        key_material: KeyMaterial,
+        client_conn_id: &[u8],
+        key_in_owner_control: bool,
+    ) -> binder::Result<binder::Strong<dyn IOpaqueKey>> {
         let key_header = KeyHeader::new(policy)?;
         check_key_material_with_policy(&key_material, policy)?;
+
         let mut client_id = Vec::new();
         client_id
             .try_reserve(client_conn_id.len())
             .map_err(|_| hwcrypto_err!(ALLOCATION_ERROR, "couldn't allcoate client id"))?;
         client_id.extend_from_slice(client_conn_id);
-        let opaque_key = OpaqueKey {
-            key_header,
-            key_material,
-            key_in_owner_control: true,
-            client_id: Some(client_id),
-        };
+        let client_id = Some(client_id);
+
+        let opaque_key = OpaqueKey { key_header, key_material, key_in_owner_control, client_id };
         let opaque_keybinder =
             BnOpaqueKey::new_binder(opaque_key, binder::BinderFeatures::default());
         Ok(opaque_keybinder)
+    }
+
+    pub(crate) fn new_with_unexportable_key(
+        policy: &KeyPolicy,
+        key_material: KeyMaterial,
+        client_conn_id: &[u8],
+    ) -> binder::Result<binder::Strong<dyn IOpaqueKey>> {
+        Self::new_binder(policy, key_material, client_conn_id, false)
     }
 
     fn check_clear_import_policy(policy: &KeyPolicy) -> Result<(), HwCryptoError> {
@@ -806,7 +831,7 @@ impl OpaqueKey {
     ) -> binder::Result<binder::Strong<dyn IOpaqueKey>> {
         check_key_material_with_policy(&key_material, policy)?;
         Self::check_clear_import_policy(policy)?;
-        Self::new_binder(policy, key_material, client_conn_id)
+        Self::new_with_exportable_key(policy, key_material, client_conn_id)
     }
 
     fn check_ownership(&self) -> bool {
@@ -914,7 +939,7 @@ impl OpaqueKey {
         client_conn_id: &[u8],
     ) -> binder::Result<binder::Strong<dyn IOpaqueKey>> {
         let key_material = generate_key_material(&policy.keyType, None)?;
-        OpaqueKey::new_binder(policy, key_material, client_conn_id)
+        OpaqueKey::new_with_exportable_key(policy, key_material, client_conn_id)
     }
 
     fn try_clone(&self) -> Result<Self, HwCryptoError> {
@@ -943,7 +968,7 @@ impl OpaqueKey {
         client_conn_id: &[u8],
     ) -> binder::Result<binder::Strong<dyn IOpaqueKey>> {
         let key_material = generate_key_material(&policy.keyType, Some(key_material))?;
-        OpaqueKey::new_binder(policy, key_material, client_conn_id)
+        OpaqueKey::new_with_exportable_key(policy, key_material, client_conn_id)
     }
 
     pub(crate) fn check_key_derivation_parameters(

@@ -28,22 +28,16 @@ MODULE_SRCS := \
 	$(LOCAL_DIR)/main.c \
 	$(LOCAL_DIR)/hwkey_srv.c \
 
-ifeq (true,$(call TOBOOL,$(WITH_FAKE_HWRNG)))
-MODULE_SRCS += $(LOCAL_DIR)/hwrng_srv_fake_provider.c
-endif
-
 ifeq (true,$(call TOBOOL,$(WITH_FAKE_HWKEY)))
 MODULE_SRCS += $(LOCAL_DIR)/hwkey_srv_fake_provider.c
-MODULE_SRCS += $(LOCAL_DIR)/hwrng_srv.c
-MODULE_DEFINES += WITH_HWCRYPTO_HWRNG=1
 endif
 
 MODULE_LIBRARY_DEPS := \
 	external/boringssl \
 	trusty/user/base/interface/hwaes \
-	trusty/user/base/interface/hwrng \
 	trusty/user/base/interface/hwkey \
 	trusty/user/base/lib/libc-trusty \
+	trusty/user/base/lib/rng \
 	trusty/user/base/lib/system_state \
 	trusty/user/base/lib/tipc \
 

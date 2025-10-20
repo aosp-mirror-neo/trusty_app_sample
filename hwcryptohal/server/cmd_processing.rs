@@ -346,7 +346,7 @@ impl MemoryBuffer {
         Ok(Self(mapped_buffer))
     }
 
-    fn get_memory_slice(&mut self) -> Result<VolatileSlice, HwCryptoError> {
+    fn get_memory_slice(&mut self) -> Result<VolatileSlice<'_>, HwCryptoError> {
         self.0.get_memory_slice()
     }
 
@@ -354,7 +354,7 @@ impl MemoryBuffer {
         &mut self,
         start: usize,
         size: usize,
-    ) -> Result<DataToProcess, HwCryptoError> {
+    ) -> Result<DataToProcess<'_>, HwCryptoError> {
         let mem_buffer = self.get_memory_slice()?;
         Ok(DataToProcess::new_from_volatile_slice(mem_buffer.subslice(start, size)?))
     }

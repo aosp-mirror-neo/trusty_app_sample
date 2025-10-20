@@ -22,13 +22,11 @@
 #include <stdlib.h>
 #include <uapi/err.h>
 
-#include <hwcrypto/hwrng_dev.h>
 #include <lib/tipc/tipc.h>
 #include <lk/err_ptr.h>
 #include <trusty_log.h>
 
 #include "hwkey_srv_priv.h"
-#include "hwrng_srv_priv.h"
 
 #include "keybox/srv.h"
 
@@ -49,14 +47,6 @@ int main(void) {
     }
 
     /* initialize service providers */
-#if WITH_HWCRYPTO_HWRNG
-    rc = hwrng_start_service(hset);
-    if (rc != NO_ERROR) {
-        TLOGE("Failed (%d) to initialize HWRNG service\n", rc);
-        goto out;
-    }
-#endif
-
     rc = hwkey_init_srv_provider(hset);
     if (rc != NO_ERROR) {
         TLOGE("Failed (%d) to initialize HwKey service\n", rc);

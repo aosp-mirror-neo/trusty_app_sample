@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2016 The Android Open Source Project
+ * Copyright (C) 2024 The Android Open Source Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -13,13 +13,10 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#pragma once
 
-#include <lib/tipc/tipc_srv.h>
-#include <lk/compiler.h>
-
-__BEGIN_CDECLS
-
-int hwrng_start_service(struct tipc_hset* hset);
-
-__END_CDECLS
+#[cfg(not(feature = "exclude_symmetric_operation_tests"))]
+mod aes_vectors;
+mod hmac_operations;
+mod key_derivation;
+#[cfg(not(feature = "exclude_symmetric_operation_tests"))]
+mod symmetric_operations;

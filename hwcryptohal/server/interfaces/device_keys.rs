@@ -15,20 +15,34 @@
  */
 
 //! Module providing trait definition to access device specific keys.
-
+use android_hardware_security_see_hwcrypto::aidl::android::hardware::security::see::hwcrypto::KeyPolicy::KeyPolicy;
 use hwcryptohal_common::err::HwCryptoError;
+use kmr_common::crypto::{OpaqueOr, hmac};
 
 /// Definition for the Keymint shared HMAC key
-pub struct KeymintHmacKey(pub [u8; 32]);
+pub struct KeymintHmacKey(pub OpaqueOr<hmac::Key>);
 
 /// Abstraction of device specific keys
 pub trait DeviceKeys {
-    /// Returns the Keymint shared HMAC key. The size of the key matches what Android expects. The
-    /// key will be passed to the caller as a HwCrypto `IOpaqueKey`, which means all uses of it will
-    /// be done through the HWCrypto HAL service. Notice that internally this key is used through an
-    /// implementetion of the KeyMint `Hmac` trait. This function shall return a valid key after
-    /// `generate_keymint_shared_hmac_key` has been called.
-    fn get_keymint_shared_hmac_key() -> Result<KeymintHmacKey, HwCryptoError>;
+    /// Returns the Keymint shared HMAC key, which is of type `HMAC_SHA256`. Returned Key is of type
+    /// `OpaqueOr<hmac::Key>`, which allows the implementation to also implement this using opaque
+    /// keys, with the only requirement that `HmacImpl` needs to be able to use the key.
+    /// `get_keymint_shared_hmac_key` will be expected to give a valid key only after
+    /// `generate_keymint_shared_hmac_key` has been executed. `policy` can be used by the
+    /// implementation to verify the policy parameters that HwCrypto will use to create the
+    /// Keymint shared HMAC opaque key.
+    fn get_keymint_shared_hmac_key(policy: &KeyPolicy) -> Result<KeymintHmacKey, HwCryptoError>;
+
+    /// Function receives all the parameters needed to calculate the shared secret according to the
+    /// ISharedSecret protocol: <https://android.googlesource.com/platform/hardware/interfaces/+/refs/heads/main/security/sharedsecret/aidl/android/hardware/security/sharedsecret/ISharedSecret.aidl#73>
+    /// Implementation shall return the 32 byte value used to verify that all `ISharedSecret`
+    /// instances calculated the same shared HMAC key.
+    fn generate_keymint_shared_hmac_key(
+        label: &[u8],
+        context: &[u8],
+        key_len: usize,
+        check_label: &[u8],
+    ) -> Result<Vec<u8>, HwCryptoError>;
 
     /// Returns a unique versioned key cryptographically bound to the caller, context and security
     /// version. If the caller current version is greater or equal than the provided version,

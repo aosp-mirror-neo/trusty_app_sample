@@ -31,7 +31,7 @@ pub trait MemoryMappedObject: Send {
 
     /// Returns a `VolatileSlice` (type provided by the crate `vm_memory`) which can be used to
     /// read/write the mapped memory.
-    fn get_memory_slice(&mut self) -> Result<VolatileSlice, HwCryptoError>;
+    fn get_memory_slice(&mut self) -> Result<VolatileSlice<'_>, HwCryptoError>;
 
     /// Returns the mapped memory buffer size, which is the total size of the mapped data.
     fn buffer_size(&self) -> usize;

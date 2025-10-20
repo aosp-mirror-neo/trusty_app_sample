@@ -29,8 +29,16 @@ MODULE_LIBRARY_DEPS += \
 	frameworks/native/libs/binder/trusty/rust/rpcbinder \
 	trusty/user/app/sample/hwcryptohal/aidl/rust  \
 	trusty/user/app/sample/hwcryptohal/common \
+	trusty/user/base/lib/openssl-rust \
+	trusty/user/base/lib/service_manager/client \
 	trusty/user/base/lib/trusty-std \
 	$(call FIND_CRATE,log) \
+
+
+ifeq (true,$(call TOBOOL,$(HWCRYPTO_EXCLUDE_SYMMETRIC_OPERATION_TESTS)))
+MODULE_RUSTFLAGS += --cfg 'feature="exclude_symmetric_operation_tests"'
+
+endif
 
 MODULE_RUST_TESTS := true
 
