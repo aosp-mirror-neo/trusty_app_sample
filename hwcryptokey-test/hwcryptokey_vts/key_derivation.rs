@@ -17,7 +17,8 @@
 use android_hardware_security_see_hwcrypto::aidl::android::hardware::security::see::hwcrypto::{
     types::{
         ExplicitKeyMaterial::ExplicitKeyMaterial, HalErrorCode, HmacKey::HmacKey,
-        KeyLifetime::KeyLifetime, KeyType::KeyType, KeyUse::KeyUse,
+        KeyLifetime::KeyLifetime, KeyType::KeyType, KeyUse::KeyUse, OperationType::OperationType,
+        ProtectionId::ProtectionId,
     },
     IHwCryptoKey::{
         ClearKeyPolicy::ClearKeyPolicy, DerivedKey::DerivedKey,
@@ -679,4 +680,48 @@ fn invalid_key_functions() {
         HalErrorCode::UNSUPPORTED,
         "getPublicKey should return UNSUPPORTED"
     );
+}
+
+#[test]
+fn set_protection_id() {
+    let hw_crypto_key = assert_ok!(get_hwcryptokey(), "couldn't retrieve hw crypto binder");
+    let initial_derivation_key = [0; HMAC_SHA256_KEY_LEN];
+    let clear_key = ExplicitKeyMaterial::Hmac(HmacKey::Sha256(initial_derivation_key));
+    let policy = KeyPolicy {
+        usage: KeyUse::DERIVE,
+        keyLifetime: KeyLifetime::PORTABLE,
+        keyPermissions: Vec::new(),
+        keyManagementKey: false,
+        keyType: KeyType::HMAC_SHA256,
+    };
+    let key =
+        assert_ok!(hw_crypto_key.importClearKey(&clear_key, &policy), "couldn't import clear key");
+    let result = key.setProtectionId(ProtectionId::WIDEVINE_OUTPUT_BUFFER, &Vec::new());
+    expect!(result.is_err(), "should not be able to call protection ID without desired protection");
+    let read_protection = vec![OperationType::READ];
+    let result = key.setProtectionId(ProtectionId::WIDEVINE_OUTPUT_BUFFER, &read_protection);
+    expect!(result.is_err(), "should not be able to set protection id to read for widevine");
+    let read_write_protection = vec![OperationType::READ, OperationType::WRITE];
+    let result = key.setProtectionId(ProtectionId::WIDEVINE_OUTPUT_BUFFER, &read_write_protection);
+    expect!(result.is_err(), "should not be able to set protection id to read for widevine");
+    let write_protection = vec![OperationType::WRITE];
+    let result = key.setProtectionId(ProtectionId::WIDEVINE_OUTPUT_BUFFER, &write_protection);
+    expect!(result.is_ok(), "we should have been able to set protection ID");
+    let result = key.setProtectionId(ProtectionId::WIDEVINE_OUTPUT_BUFFER, &write_protection);
+    expect!(result.is_err(), "should not be able to set protection id after it was set");
+
+    // Verifying that we cannot call setProtectionId on keys we have imported
+    let key =
+        assert_ok!(hw_crypto_key.importClearKey(&clear_key, &policy), "couldn't import clear key");
+    let client_policy =
+        assert_ok!(hw_crypto_key.getCurrentDicePolicy(), "Couldn't get dice policy back");
+    let token =
+        assert_ok!(key.getShareableToken(client_policy.as_slice()), "Couldn't get shareable token");
+    let imported_key = assert_ok!(
+        hw_crypto_key.keyTokenImport(&token, client_policy.as_slice()),
+        "Couldn't import shareable token"
+    );
+    let result =
+        imported_key.setProtectionId(ProtectionId::WIDEVINE_OUTPUT_BUFFER, &write_protection);
+    expect!(result.is_err(), "should not be able to set protection id after on an imported key");
 }
