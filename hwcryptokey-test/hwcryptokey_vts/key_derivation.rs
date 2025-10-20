@@ -16,8 +16,8 @@
 
 use android_hardware_security_see_hwcrypto::aidl::android::hardware::security::see::hwcrypto::{
     types::{
-        ExplicitKeyMaterial::ExplicitKeyMaterial, HmacKey::HmacKey, KeyLifetime::KeyLifetime,
-        KeyType::KeyType, KeyUse::KeyUse,
+        ExplicitKeyMaterial::ExplicitKeyMaterial, HalErrorCode, HmacKey::HmacKey,
+        KeyLifetime::KeyLifetime, KeyType::KeyType, KeyUse::KeyUse,
     },
     IHwCryptoKey::{
         ClearKeyPolicy::ClearKeyPolicy, DerivedKey::DerivedKey,
@@ -646,4 +646,37 @@ fn valid_opaque_key_derivation() {
         panic!("shouldn't have recovered an opaque key");
     };
     expect_eq!(derived_clear_key1, derived_clear_key2, "Derived keys should have matched");
+}
+
+#[test]
+fn invalid_key_functions() {
+    let hw_crypto_key = assert_ok!(get_hwcryptokey(), "couldn't retrieve hw crypto binder");
+    let clear_key = ExplicitKeyMaterial::Hmac(HmacKey::Sha256([0; HMAC_SHA256_KEY_LEN]));
+    let policy = KeyPolicy {
+        usage: KeyUse::SIGN,
+        keyLifetime: KeyLifetime::PORTABLE,
+        keyPermissions: Vec::new(),
+        keyManagementKey: false,
+        keyType: KeyType::HMAC_SHA256,
+    };
+    let key =
+        assert_ok!(hw_crypto_key.importClearKey(&clear_key, &policy), "couldn't import clear key");
+    let key2 =
+        assert_ok!(hw_crypto_key.importClearKey(&clear_key, &policy), "couldn't import clear key");
+    let export_err = assert_ok!(key
+        .exportWrappedKey(&key2)
+        .err()
+        .ok_or("exportWrappedKey doesn't need to be implemented"));
+    expect_eq!(
+        export_err.service_specific_error(),
+        HalErrorCode::UNSUPPORTED,
+        "exportWrappedKey should return UNSUPPORTED"
+    );
+    let get_public_key_err =
+        assert_ok!(key.getPublicKey().err().ok_or("getPublicKey doesn't need to be implemented"));
+    expect_eq!(
+        get_public_key_err.service_specific_error(),
+        HalErrorCode::UNSUPPORTED,
+        "getPublicKey should return UNSUPPORTED"
+    );
 }
