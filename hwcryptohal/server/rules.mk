@@ -37,10 +37,19 @@ MODULE_LIBRARY_DEPS += \
 	$(call FIND_CRATE,log) \
 	$(call FIND_CRATE,static_assertions) \
 	trusty/user/base/lib/trusty-log \
-	$(call FIND_CRATE,vm-memory) \
+
+ifeq (true,$(call TOBOOL,$(HWCRYPTO_VM_CRATE_SUPPORT)))
+MODULE_LIBRARY_DEPS += $(call FIND_CRATE,vm-memory)
+
+endif
 
 MODULE_RUST_TESTS := true
 
 MODULE_RUST_USE_CLIPPY := true
+
+ifeq (true,$(call TOBOOL,$(HWCRYPTO_VM_CRATE_SUPPORT)))
+MODULE_RUSTFLAGS += --cfg 'feature="use_vm_memory_crate"'
+
+endif
 
 include make/library.mk

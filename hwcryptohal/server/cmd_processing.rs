@@ -16,20 +16,25 @@
 
 //! Module providing an implementation of a cryptographic command processor.
 
+#[cfg(feature = "use_vm_memory_crate")]
+use android_hardware_security_see_hwcrypto::aidl::android::hardware::security::see::hwcrypto::types::MemoryBufferReference::MemoryBufferReference;
 use android_hardware_security_see_hwcrypto::aidl::android::hardware::security::see::hwcrypto::types::{
-    MemoryBufferReference::MemoryBufferReference, OperationData::OperationData, Void::Void,
+    OperationData::OperationData, Void::Void,
 };
 use android_hardware_security_see_hwcrypto::aidl::android::hardware::security::see::hwcrypto::{
     CryptoOperation::CryptoOperation,
-    MemoryBufferParameter::{
-        MemoryBuffer::MemoryBuffer as MemoryBufferAidl, MemoryBufferParameter,
-    },
+    MemoryBufferParameter::MemoryBufferParameter,
     OperationParameters::OperationParameters,
     PatternParameters::PatternParameters,
 };
+#[cfg(feature = "use_vm_memory_crate")]
+use android_hardware_security_see_hwcrypto::aidl::android::hardware::security::see::hwcrypto::MemoryBufferParameter::MemoryBuffer::MemoryBuffer as MemoryBufferAidl;
 use hwcryptohal_common::{err::HwCryptoError, hwcrypto_err};
+#[cfg(feature = "use_vm_memory_crate")]
 use hwcryptohalinterfaces::MemoryMappedObject;
+#[cfg(feature = "use_vm_memory_crate")]
 use hwcryptohalplatform::MemoryMappedObjectImpl;
+#[cfg(feature = "use_vm_memory_crate")]
 use vm_memory::{volatile_memory::VolatileSlice, Bytes, VolatileMemory};
 
 use crate::crypto_operation::{CopyOperation, CryptographicOperation, ICryptographicOperation};
@@ -97,6 +102,7 @@ enum CmdProcessorState {
 }
 
 pub(crate) enum DataToProcessBuffer<'a> {
+    #[cfg(feature = "use_vm_memory_crate")]
     VolatileSlice(VolatileSlice<'a>),
     Slice(&'a mut [u8]),
 }
@@ -109,6 +115,7 @@ pub(crate) struct DataToProcess<'a> {
 }
 
 impl<'a> DataToProcess<'a> {
+    #[cfg(feature = "use_vm_memory_crate")]
     pub(crate) fn new_from_volatile_slice(buffer: VolatileSlice<'a>) -> Self {
         Self { buffer: DataToProcessBuffer::VolatileSlice(buffer), start_index: 0 }
     }
@@ -119,6 +126,7 @@ impl<'a> DataToProcess<'a> {
 
     pub(crate) fn len(&self) -> usize {
         match &self.buffer {
+            #[cfg(feature = "use_vm_memory_crate")]
             DataToProcessBuffer::VolatileSlice(vs) => vs.len() - self.start_index,
             DataToProcessBuffer::Slice(s) => s.len() - self.start_index,
         }
@@ -126,6 +134,7 @@ impl<'a> DataToProcess<'a> {
 
     pub(crate) fn is_non_volatile_slice_backed(&self) -> bool {
         match &self.buffer {
+            #[cfg(feature = "use_vm_memory_crate")]
             DataToProcessBuffer::VolatileSlice(_) => true,
             DataToProcessBuffer::Slice(_) => false,
         }
@@ -145,6 +154,9 @@ impl<'a> DataToProcess<'a> {
             ));
         }
 
+        // Allowing the irrefutable pattern because we are compiling away the other
+        // `DataToProcessBuffer` as a workaround.
+        #[allow(irrefutable_let_patterns)]
         if let DataToProcess { buffer: DataToProcessBuffer::Slice(slice), start_index } = self {
             let slice_start = *start_index;
             *start_index += len;
@@ -183,6 +195,7 @@ impl<'a> DataToProcess<'a> {
             DataToProcessBuffer::Slice(from) => {
                 to[..len].copy_from_slice(&from[self.start_index..self.start_index + len])
             }
+            #[cfg(feature = "use_vm_memory_crate")]
             DataToProcessBuffer::VolatileSlice(from) => {
                 from.read_slice(&mut to[..len], self.start_index)?
             }
@@ -201,6 +214,7 @@ impl<'a> DataToProcess<'a> {
             ));
         }
         match &mut self.buffer {
+            #[cfg(feature = "use_vm_memory_crate")]
             DataToProcessBuffer::VolatileSlice(to) => to.write_slice(from, self.start_index)?,
             DataToProcessBuffer::Slice(to) => {
                 to[self.start_index..(self.start_index + from.len())].copy_from_slice(from)
@@ -239,11 +253,13 @@ impl<'a> DataToProcess<'a> {
         let to_start_index = self.start_index;
 
         match (&slice.buffer, &mut self.buffer) {
+            #[cfg(feature = "use_vm_memory_crate")]
             (DataToProcessBuffer::Slice(from), DataToProcessBuffer::VolatileSlice(to)) => to
                 .write_slice(
                     &from[from_start_index..from_start_index + read_len],
                     to_start_index,
                 )?,
+            #[cfg(feature = "use_vm_memory_crate")]
             (DataToProcessBuffer::VolatileSlice(from), DataToProcessBuffer::VolatileSlice(to)) => {
                 from.get_slice(from_start_index, read_len)?
                     .copy_to_volatile_slice(to.get_slice(to_start_index, read_len)?)
@@ -251,6 +267,7 @@ impl<'a> DataToProcess<'a> {
             (DataToProcessBuffer::Slice(from), DataToProcessBuffer::Slice(to)) => to
                 [to_start_index..to_start_index + read_len]
                 .copy_from_slice(&from[from_start_index..from_start_index + read_len]),
+            #[cfg(feature = "use_vm_memory_crate")]
             (DataToProcessBuffer::VolatileSlice(from), DataToProcessBuffer::Slice(to)) => from
                 .read_slice(&mut to[to_start_index..to_start_index + read_len], from_start_index)?,
         }
@@ -280,6 +297,7 @@ impl<'a> DataToProcess<'a> {
 // Structure that keeps track of current output buffer
 enum OutputData<'a> {
     DataBuffer(&'a mut Vec<u8>),
+    #[cfg(feature = "use_vm_memory_crate")]
     MemoryReference(MemoryBufferReference, usize),
 }
 
@@ -288,11 +306,13 @@ enum OutputData<'a> {
 // Operation which contains the `MemoryBufferReference`. This wrapper preserves that information to
 // be used along function call sequences.
 #[derive(Copy, Clone)]
+#[cfg(feature = "use_vm_memory_crate")]
 enum MemoryBufferReferenceWithType {
     Input(MemoryBufferReference),
     Output(MemoryBufferReference),
 }
 
+#[cfg(feature = "use_vm_memory_crate")]
 impl MemoryBufferReferenceWithType {
     fn len(&self) -> Result<usize, HwCryptoError> {
         match self {
@@ -320,6 +340,7 @@ impl MemoryBufferReferenceWithType {
 /// Given a `MemoryBufferReference` it checks that its elements are valid (buffer_start should be
 /// positive and buffer_size should be greater than 0) and then returns the memory reference
 /// start/stop/size as an `usize` tuple
+#[cfg(feature = "use_vm_memory_crate")]
 fn get_limits(
     buffer_reference: &MemoryBufferReferenceWithType,
 ) -> Result<(usize, usize, usize), HwCryptoError> {
@@ -338,8 +359,10 @@ fn get_limits(
     }
 }
 
+#[cfg(feature = "use_vm_memory_crate")]
 struct MemoryBuffer(MemoryMappedObjectImpl);
 
+#[cfg(feature = "use_vm_memory_crate")]
 impl MemoryBuffer {
     fn new(memory_buffer_parameters: &MemoryBufferParameter) -> Result<Self, HwCryptoError> {
         let mapped_buffer = MemoryMappedObjectImpl::mmap(memory_buffer_parameters)?;
@@ -362,13 +385,16 @@ impl MemoryBuffer {
 
 // `CmdProcessorContext` is the type in charge of executing a set of commands.
 pub(crate) struct CmdProcessorContext {
+    #[cfg(feature = "use_vm_memory_crate")]
     current_input_memory_buffer: Option<MemoryBuffer>,
+    #[cfg(feature = "use_vm_memory_crate")]
     current_output_memory_buffer: Option<MemoryBuffer>,
     current_state: CmdProcessorState,
     current_crypto_operation: Option<Box<dyn ICryptographicOperation>>,
 }
 
 impl std::fmt::Debug for CmdProcessorContext {
+    #[cfg(feature = "use_vm_memory_crate")]
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
@@ -378,12 +404,19 @@ impl std::fmt::Debug for CmdProcessorContext {
             self.current_state
         )
     }
+
+    #[cfg(not(feature = "use_vm_memory_crate"))]
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "CmdProcessorContext {{ state: {:?} }}", self.current_state)
+    }
 }
 
 impl CmdProcessorContext {
     pub(crate) fn new() -> Self {
         Self {
+            #[cfg(feature = "use_vm_memory_crate")]
             current_input_memory_buffer: None,
+            #[cfg(feature = "use_vm_memory_crate")]
             current_output_memory_buffer: None,
             current_state: CmdProcessorState::InitialState,
             current_crypto_operation: None,
@@ -392,6 +425,7 @@ impl CmdProcessorContext {
 
     // Helper function used to check if a given `MemoryBufferReference` is valid for the active
     // `MemoryBuffer`s of the state machine
+    #[cfg(feature = "use_vm_memory_crate")]
     fn check_memory_reference_in_range(
         &self,
         buffer_reference: &MemoryBufferReferenceWithType,
@@ -429,6 +463,7 @@ impl CmdProcessorContext {
         }
     }
 
+    #[cfg(feature = "use_vm_memory_crate")]
     fn get_data_buffer_size(
         &self,
         buffer_reference: &MemoryBufferReferenceWithType,
@@ -437,6 +472,7 @@ impl CmdProcessorContext {
         buffer_reference.len()
     }
 
+    #[cfg(feature = "use_vm_memory_crate")]
     fn set_memory_buffer_step(
         &mut self,
         parameters: &MemoryBufferParameter,
@@ -466,12 +502,25 @@ impl CmdProcessorContext {
         }
     }
 
+    #[cfg(not(feature = "use_vm_memory_crate"))]
+    fn set_memory_buffer_step(
+        &mut self,
+        _parameters: &MemoryBufferParameter,
+        _current_output_ref: &mut Option<OutputData>,
+    ) -> Result<(), HwCryptoError> {
+        Err(hwcrypto_err!(
+            UNSUPPORTED,
+            "set_memory_buffer_step not supported without use_vm_memory_crate"
+        ))
+    }
+
     fn add_output_step<'a>(
         &mut self,
         output_parameters: &'a mut OperationData,
     ) -> Result<OutputData<'a>, HwCryptoError> {
         match output_parameters {
             OperationData::DataBuffer(buf) => Ok(OutputData::DataBuffer(buf)),
+            #[cfg(feature = "use_vm_memory_crate")]
             OperationData::MemoryBufferReference(buffer_reference) => {
                 Ok(OutputData::MemoryReference(
                     *buffer_reference,
@@ -480,6 +529,11 @@ impl CmdProcessorContext {
                     ))?,
                 ))
             }
+            #[cfg(not(feature = "use_vm_memory_crate"))]
+            OperationData::MemoryBufferReference(_) => Err(hwcrypto_err!(
+                UNSUPPORTED,
+                "MemoryBufferReference not supported without use_vm_memory_crate"
+            )),
         }
     }
 
@@ -518,6 +572,7 @@ impl CmdProcessorContext {
         // Doing this check here to keep the borrow checker happy because the next step borrows self
         // mutably. This is because even though it is an input, if it is a buffer reference, the
         // available method could potentially be use to modify the underlying memory buffer.
+        #[cfg(feature = "use_vm_memory_crate")]
         if let Some(OutputData::MemoryReference(buff_ref, _)) = current_output_ref.as_ref() {
             self.check_memory_reference_in_range(&MemoryBufferReferenceWithType::Output(
                 *buff_ref,
@@ -525,6 +580,7 @@ impl CmdProcessorContext {
         }
         // Creating a `DataToProcess` variable to abstract away where the input is located
         let mut input = match input_parameters {
+            #[cfg(feature = "use_vm_memory_crate")]
             Some(OperationData::MemoryBufferReference(buffer_reference)) => Some({
                 let buffer_reference = MemoryBufferReferenceWithType::Input(*buffer_reference);
                 self.check_memory_reference_in_range(&buffer_reference)?;
@@ -534,6 +590,13 @@ impl CmdProcessorContext {
                     .ok_or(hwcrypto_err!(BAD_PARAMETER, "input buffer not set yet"))?
                     .get_subslice_as_data_to_process(input_start, input_size)?
             }),
+            #[cfg(not(feature = "use_vm_memory_crate"))]
+            Some(OperationData::MemoryBufferReference(_)) => {
+                return Err(hwcrypto_err!(
+                    UNSUPPORTED,
+                    "MemoryBufferReference not supported without use_vm_memory_crate"
+                ));
+            }
             Some(OperationData::DataBuffer(input)) => {
                 Some(DataToProcess::new_from_slice(&mut input[..]))
             }
@@ -575,6 +638,7 @@ impl CmdProcessorContext {
                     crypto_operation.operation(input.as_mut(), &mut output_buff, is_finish)?;
                 output_vec.truncate(original_size + added_bytes);
             }
+            #[cfg(feature = "use_vm_memory_crate")]
             OutputData::MemoryReference(output_buff_ref, remaining_size) => {
                 if req_output_size > *remaining_size {
                     return Err(hwcrypto_err!(ALLOCATION_ERROR, "run out of space output buffer"));
@@ -621,8 +685,11 @@ impl CmdProcessorContext {
         &mut self,
         current_output_ref: &mut Option<OutputData>,
     ) -> Result<(), HwCryptoError> {
-        self.current_input_memory_buffer = None;
-        self.current_output_memory_buffer = None;
+        #[cfg(feature = "use_vm_memory_crate")]
+        {
+            self.current_input_memory_buffer = None;
+            self.current_output_memory_buffer = None;
+        }
         self.current_crypto_operation = None;
         *current_output_ref = None;
         self.current_state = CmdProcessorState::Destroyed;
@@ -765,12 +832,17 @@ mod tests {
         OperationParameters::OperationParameters,
         PatternParameters::PatternParameters,
     };
+    #[cfg(feature = "use_vm_memory_crate")]
     use hwcryptohalinterfaces::{TestAllocatedPage, TestHelpers};
+    #[cfg(feature = "use_vm_memory_crate")]
     use hwcryptohalplatform::TestHelpersImpl;
-    use test::{assert_ok, expect, expect_eq};
+    #[cfg(feature = "use_vm_memory_crate")]
+    use test::assert_ok;
+    use test::{expect, expect_eq};
 
     use crate::tests::connection_info;
 
+    #[cfg(feature = "use_vm_memory_crate")]
     fn read_slice(
         memory_buffer: &mut MemoryBuffer,
         buf: &mut [u8],
@@ -780,6 +852,7 @@ mod tests {
         mem_buffer.read_slice(buf, start).map_err(HwCryptoError::from)
     }
 
+    #[cfg(feature = "use_vm_memory_crate")]
     fn write_slice(
         memory_buffer: &mut MemoryBuffer,
         buf: &[u8],
@@ -790,6 +863,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "use_vm_memory_crate")]
     fn create_memory_buffer() {
         let mut output_page = assert_ok!(
             TestHelpersImpl::allocate_test_page(Some(&[1, 2, 3, 4, 5, 6, 7, 8, 9])),
@@ -836,6 +910,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "use_vm_memory_crate")]
     fn create_output_data_references() {
         let mut output_page =
             assert_ok!(TestHelpersImpl::allocate_test_page(None), "couldn't allocate test page");
@@ -1026,6 +1101,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "use_vm_memory_crate")]
     fn check_output_step_length() {
         let mut output_page =
             assert_ok!(TestHelpersImpl::allocate_test_page(None), "couldn't allocate test page");
@@ -1073,6 +1149,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "use_vm_memory_crate")]
     fn output_step_out_range() {
         let mut output_page =
             assert_ok!(TestHelpersImpl::allocate_test_page(None), "couldn't allocate test page");
@@ -1125,6 +1202,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "use_vm_memory_crate")]
     fn memory_reference_copy_operation_on_initial_state() {
         let mut output_page =
             assert_ok!(TestHelpersImpl::allocate_test_page(None), "couldn't allocate test page");
@@ -1207,6 +1285,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "use_vm_memory_crate")]
     fn simple_copy_opeartion_on_initial_state_buffer_reference_input() {
         let mut cmd_list = Vec::<CryptoOperation>::new();
         let mut cmd_processor = CmdProcessorContext::new();
@@ -1332,6 +1411,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "use_vm_memory_crate")]
     fn copy_slice() {
         let mut output_page =
             assert_ok!(TestHelpersImpl::allocate_test_page(None), "couldn't allocate test page");
@@ -1491,6 +1571,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "use_vm_memory_crate")]
     fn data_to_process_memory_reference_copies() {
         let mut output_page =
             assert_ok!(TestHelpersImpl::allocate_test_page(None), "couldn't allocate test page");

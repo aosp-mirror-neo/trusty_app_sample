@@ -20,15 +20,19 @@ mod allowed_connections;
 mod client_identification;
 mod device_keys;
 mod ffi_bindings;
+#[cfg(feature = "use_vm_memory_crate")]
 mod memory;
 mod rng;
 mod test_helpers;
+#[cfg(feature = "use_vm_memory_crate")]
+mod test_helpers_memory;
 mod time;
 
 pub use client_identification::TrustyClientIdentificationImpl as ClientIdentificationImpl;
 pub use device_keys::TrustyDeviceKeys as DeviceKeysImpl;
 pub use kmr_crypto_boring::aes::BoringAes as AesImpl;
 pub use kmr_crypto_boring::hmac::BoringHmac as HmacImpl;
+#[cfg(feature = "use_vm_memory_crate")]
 pub use memory::TrustyMappedObject as MemoryMappedObjectImpl;
 pub use rng::PlatformRng as RngImpl;
 pub use test_helpers::TrustyTestHelpers as TestHelpersImpl;
