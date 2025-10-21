@@ -725,3 +725,80 @@ fn set_protection_id() {
         imported_key.setProtectionId(ProtectionId::WIDEVINE_OUTPUT_BUFFER, &write_protection);
     expect!(result.is_err(), "should not be able to set protection id after on an imported key");
 }
+
+#[test]
+fn derive_dice_bound_from_opaque_key() {
+    let hw_crypto_key = assert_ok!(get_hwcryptokey(), "couldn't retrieve hw crypto binder");
+    let derivation_key = [0; HMAC_SHA256_KEY_LEN];
+    let clear_key = ExplicitKeyMaterial::Hmac(HmacKey::Sha256(derivation_key));
+    let policy = KeyPolicy {
+        usage: KeyUse::DERIVE,
+        keyLifetime: KeyLifetime::PORTABLE,
+        keyPermissions: Vec::new(),
+        keyManagementKey: false,
+        keyType: KeyType::HMAC_SHA256,
+    };
+    let key =
+        assert_ok!(hw_crypto_key.importClearKey(&clear_key, &policy), "couldn't import clear key");
+
+    let dice_derivation_key = DiceBoundDerivationKey::OpaqueKey(Some(key));
+
+    // Generate the current derivation key and policy
+    let key_and_policy =
+        assert_ok!(hw_crypto_key.deriveCurrentDicePolicyBoundKey(&dice_derivation_key));
+    let DiceCurrentBoundKeyResult {
+        diceBoundKey: dice_bound_derivation_key,
+        dicePolicyForKeyVersion: dice_policy,
+    } = key_and_policy;
+
+    expect!(dice_bound_derivation_key.is_some(), "should have received a key");
+    expect!(dice_policy.len() > 0, "should have received a DICE policy");
+
+    let dice_bound_derivation_key = dice_bound_derivation_key.unwrap();
+    let key_policy =
+        assert_ok!(dice_bound_derivation_key.getKeyPolicy(), "couldn't retrieve key policy");
+    expect_eq!(
+        key_policy.keyLifetime,
+        policy.keyLifetime,
+        "lifetime should match with derivation key"
+    );
+
+    // We cannot manually derive the same opaque DICE bound key here because the DICE policy we
+    // receive here is encrypted, so will only check that I can derive a key with key
+    let derivation_context = b"context";
+    let key_size = HMAC_SHA256_KEY_LEN;
+
+    // Deriving a clear key
+    let derived_policy =
+        DerivedKeyPolicy::ClearKeyPolicy(ClearKeyPolicy { keySizeBytes: key_size as i32 });
+    let params = DerivedKeyParameters {
+        derivationKey: Some(dice_bound_derivation_key),
+        keyPolicy: derived_policy,
+        context: derivation_context.to_vec(),
+    };
+    let derived_key_result = hw_crypto_key.deriveKey(&params);
+    expect!(derived_key_result.is_ok(), "should be able to derive a clear key");
+}
+
+#[test]
+fn try_derive_dice_bound_from_opaque_key_wrong_type() {
+    let hw_crypto_key = assert_ok!(get_hwcryptokey(), "couldn't retrieve hw crypto binder");
+    let derivation_key = [0; HMAC_SHA256_KEY_LEN];
+    let clear_key = ExplicitKeyMaterial::Hmac(HmacKey::Sha256(derivation_key));
+    let policy = KeyPolicy {
+        usage: KeyUse::SIGN,
+        keyLifetime: KeyLifetime::PORTABLE,
+        keyPermissions: Vec::new(),
+        keyManagementKey: false,
+        keyType: KeyType::HMAC_SHA256,
+    };
+    let key =
+        assert_ok!(hw_crypto_key.importClearKey(&clear_key, &policy), "couldn't import clear key");
+
+    let dice_derivation_key = DiceBoundDerivationKey::OpaqueKey(Some(key));
+
+    // Generate the current derivation key and policy
+    let result = hw_crypto_key.deriveCurrentDicePolicyBoundKey(&dice_derivation_key);
+
+    expect!(result.is_err(), "wrong type of key provided for derivation");
+}
