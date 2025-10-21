@@ -718,10 +718,18 @@ impl CmdProcessorContext {
                     CryptoOperation::DataInput(step_data) => {
                         self.input_step(step_data, &mut curr_output)?;
                     }
-                    CryptoOperation::AadInput(_) => unimplemented!("AadInput not implemented yet"),
-                    CryptoOperation::SetOperationParameters(_step) => unimplemented!(
-                        "SetOperationParameters from RunningOperation not implemented yet"
-                    ),
+                    CryptoOperation::AadInput(_) => {
+                        return Err(hwcrypto_err!(
+                            UNSUPPORTED,
+                            "authenticated encryption not supported"
+                        ))
+                    }
+                    CryptoOperation::SetOperationParameters(_step) => {
+                        return Err(hwcrypto_err!(
+                            UNSUPPORTED,
+                            "SetOperationParameters from RunningOperation not supported yet"
+                        ))
+                    }
                     CryptoOperation::SetMemoryBuffer(_) => {
                         return Err(hwcrypto_err!(
                         BAD_PARAMETER,
