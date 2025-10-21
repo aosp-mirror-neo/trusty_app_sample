@@ -197,6 +197,10 @@ impl HwCryptoKey {
         check_client_policy_owner: bool,
     ) -> Result<DiceBoundKeyResult, HwCryptoError> {
         // Verifying provided DICE policy
+        // The policy that the client stores has 2 components: A dice policy that we get from
+        // auth-manager (caller_client_policy) and a second policy that the platform implementation
+        // of the DeviceKeys traits uses to retrieve a versioned device bound key
+        // (device_key_policy).
         let (caller_client_policy, device_key_policy) =
             ClientPolicyWrapper::from_encrypted_slice(client_policy_for_versioned_key)?
                 .into_client_and_device_key_policies()?;
@@ -208,34 +212,36 @@ impl HwCryptoKey {
         if check_client_policy_owner && !policy_matches {
             return Err(hwcrypto_err!(BAD_PARAMETER, "client identity mismatch"));
         }
-        let mut op_context = DerivationContext::new(HkdfOperationType::DiceBoundDerivation)?;
-        // Using the decrypted (stable) DICE policy for context, so keys derived with the same
-        // version will match
-        op_context.add_owned_binary_string(caller_client_policy)?;
-        let concat_context = op_context.create_key_derivation_context()?;
 
         // The returned key will only be used for derivation, so fixing tis type to HMAC_SHA256
         let key_type = KeyType::HMAC_SHA256;
         let key_size = opaque_key::get_key_size_in_bytes(&key_type)?;
+
+        let mut policy = KeyPolicy {
+            usage: KeyUse::DERIVE,
+            keyLifetime: KeyLifetime::HARDWARE,
+            keyPermissions: Vec::new(),
+            keyType: key_type,
+            keyManagementKey: false,
+        };
 
         match derivation_key {
             DiceBoundDerivationKey::KeyId(key_id) => {
                 if DeviceKeyId::DEVICE_BOUND_KEY != *key_id {
                     return Err(hwcrypto_err!(UNSUPPORTED, "unknown key id {:?}", key_id));
                 }
+                let mut op_context =
+                    DerivationContext::new(HkdfOperationType::DiceBoundDerivation)?;
+                // Using the decrypted (stable) DICE policy for context, so keys derived with the
+                // same version will match
+                op_context.add_owned_binary_string(caller_client_policy)?;
+                let concat_context = op_context.create_key_derivation_context()?;
                 let derived_key = DeviceKeysImpl::derive_caller_unique_key(
                     concat_context.as_slice(),
                     device_key_policy.as_slice(),
                     key_size,
                 )?;
 
-                let policy = KeyPolicy {
-                    usage: KeyUse::DERIVE,
-                    keyLifetime: KeyLifetime::HARDWARE,
-                    keyPermissions: Vec::new(),
-                    keyType: key_type,
-                    keyManagementKey: false,
-                };
                 // Create a new opaque key from the generated key material
                 let km = opaque_key::generate_key_material(&policy.keyType, Some(derived_key))?;
                 let key = opaque_key::OpaqueKey::new_with_exportable_key(
@@ -249,10 +255,31 @@ impl HwCryptoKey {
                     dicePolicyWasCurrent: policy_is_current,
                 })
             }
-            DiceBoundDerivationKey::OpaqueKey(_opaque_key) => Err(hwcrypto_err!(
-                UNSUPPORTED,
-                "derivation of DICE bound keys using opaque keys not supported yet"
-            )),
+            DiceBoundDerivationKey::OpaqueKey(opaque_key) => {
+                let derivation_key: OpaqueKey = opaque_key
+                    .as_ref()
+                    .ok_or(hwcrypto_err!(BAD_PARAMETER, "derivation key not provided"))?
+                    .try_into()?;
+                // Getting derivation key policy
+                let derivation_key_policy = derivation_key.getKeyPolicy().map_err(|e| {
+                    hwcrypto_err!(GENERIC_ERROR, "couldn't get derivation key policy {:?}", e)
+                })?;
+                // Lifetime of the derived key is inherited from the derivation key
+                policy.keyLifetime = derivation_key_policy.keyLifetime;
+                let key = derivation_key
+                    .derive_dice_bound_key(caller_client_policy, &policy, self.client_id.as_slice())
+                    .map_err(|e| {
+                        hwcrypto_err!(
+                            GENERIC_ERROR,
+                            "couldn't derive opaque dice bound key {:?}",
+                            e
+                        )
+                    })?;
+                Ok(DiceBoundKeyResult {
+                    diceBoundKey: Some(key),
+                    dicePolicyWasCurrent: policy_is_current,
+                })
+            }
         }
     }
 

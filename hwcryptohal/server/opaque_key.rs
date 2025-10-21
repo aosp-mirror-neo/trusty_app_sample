@@ -110,10 +110,17 @@ fn get_boot_unique_value() -> Result<BootUniqueValue, HwCryptoError> {
 
 #[allow(clippy::enum_variant_names)]
 #[derive(Copy, Clone)]
+// Enum used to get the prefixes for the different contexts used for key derivations
 pub(crate) enum HkdfOperationType {
+    // Key to be derived is DICE bound and uses a device key as derivation key.
     DiceBoundDerivation = 1,
+    // Key to be derived is DICE bound and uses an opaque key as derivation key.
+    ProvidedKeyDiceBoundDerivation = 2,
+    // Key to be derived is a clear key and uses an opaque key as derivation key.
     ClearKeyDerivation = 3,
+    // Key to be derived is an opaque key and uses an opaque key as derivation key.
     OpaqueKeyDerivation = 4,
+    // Key to be derived will be used to encrypt key tokens to be shared with a client.
     InternalSealingKeyDerivation = 5,
 }
 
@@ -1062,6 +1069,27 @@ impl OpaqueKey {
         op_context.add_binary_string(context)?;
         let raw_key_material = self.derive_raw_key_material(op_context, derived_key_size)?;
         Self::new_opaque_key_from_raw_bytes(&aidl_policy, raw_key_material, client_conn_id)
+    }
+
+    // Derives a key bound to a DICE policy using this key as the derivation key. This means that
+    // this key needs to be an HMAC derivation key.
+    pub(crate) fn derive_dice_bound_key(
+        &self,
+        dice_policy: Vec<u8>,
+        derived_key_policy: &KeyPolicy,
+        client_conn_id: &[u8],
+    ) -> binder::Result<binder::Strong<dyn IOpaqueKey>> {
+        self.expiration_time_valid()?;
+        self.key_can_be_used_for_derivation()?;
+        let serialized_policy = policy::cbor_serialize_key_policy(&self.getKeyPolicy()?)?;
+        let mut op_context =
+            DerivationContext::new(HkdfOperationType::ProvidedKeyDiceBoundDerivation)?;
+        op_context.add_owned_binary_string(dice_policy)?;
+        op_context.add_owned_binary_string(serialized_policy)?;
+        self.check_key_derivation_parameters(derived_key_policy)?;
+        let derived_key_size = get_key_size_in_bytes(&derived_key_policy.keyType)?;
+        let raw_key_material = self.derive_raw_key_material(op_context, derived_key_size)?;
+        Self::new_opaque_key_from_raw_bytes(derived_key_policy, raw_key_material, client_conn_id)
     }
 
     fn derivation_allowed_lifetime(
