@@ -31,9 +31,7 @@ MODULE_LIBRARY_DEPS += \
 	trusty/user/base/interface/shared_secret/aidl \
 	trusty/user/app/sample/hwcryptohal/server/interfaces \
 	trusty/user/app/sample/hwcryptohal/server/platform \
-	trusty/user/base/lib/keymint-rust/boringssl \
 	trusty/user/base/lib/keymint-rust/common \
-	trusty/user/base/lib/openssl-rust \
 	$(call FIND_CRATE,log) \
 	$(call FIND_CRATE,static_assertions) \
 	trusty/user/base/lib/trusty-log \

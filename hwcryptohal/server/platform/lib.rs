@@ -17,6 +17,7 @@
 //! library implementing platform specific functions.
 
 mod allowed_connections;
+mod boot_info;
 mod client_identification;
 mod device_keys;
 mod ffi_bindings;
@@ -28,6 +29,7 @@ mod test_helpers;
 mod test_helpers_memory;
 mod time;
 
+pub use boot_info::TrustyBootUniqueValue as BootUniqueValueImpl;
 pub use client_identification::TrustyClientIdentificationImpl as ClientIdentificationImpl;
 pub use device_keys::TrustyDeviceKeys as DeviceKeysImpl;
 pub use kmr_crypto_boring::aes::BoringAes as AesImpl;
