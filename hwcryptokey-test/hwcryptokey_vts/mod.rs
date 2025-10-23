@@ -18,5 +18,6 @@
 mod aes_vectors;
 mod hmac_operations;
 mod key_derivation;
+mod key_operations;
 #[cfg(not(feature = "exclude_symmetric_operation_tests"))]
 mod symmetric_operations;
