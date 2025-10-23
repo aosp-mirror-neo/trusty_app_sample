@@ -15,10 +15,10 @@
 //! TA functionality for shared secret negotiation.
 
 use alloc::vec::Vec;
-use hwcryptohal_common::{err::HwCryptoError, hwcrypto_err};
 use hwcryptohalinterfaces::DeviceKeys;
 use hwcryptohalplatform::DeviceKeysImpl;
 use kmr_common::{crypto::Rng, vec_try, FallibleAllocExt};
+use kmr_wire::keymint::ErrorCode;
 use log::info;
 use std::sync::Mutex;
 
@@ -38,14 +38,14 @@ impl binder::Interface for SharedSecret {}
 
 impl ISharedSecret for SharedSecret {
     fn getSharedSecretParameters(&self) -> binder::Result<SharedSecretParameters> {
-        Ok(self.get_shared_secret_params()?)
+        self.get_shared_secret_params()
     }
 
     fn computeSharedSecret(
         &self,
         shared_secret_parameters: &[SharedSecretParameters],
     ) -> binder::Result<Vec<u8>> {
-        Ok(self.compute_shared_secret(shared_secret_parameters)?)
+        self.compute_shared_secret(shared_secret_parameters)
     }
 }
 
@@ -55,12 +55,17 @@ impl SharedSecret {
         BnSharedSecret::new_binder(shared_secret, binder::BinderFeatures::default())
     }
 
-    fn get_shared_secret_params(&self) -> Result<SharedSecretParameters, HwCryptoError> {
+    fn get_shared_secret_params(&self) -> binder::Result<SharedSecretParameters> {
         {
             // Mutex won't be poisoned on a single threaded application
             let mut shared_secret_params = self.shared_secret_params.lock().unwrap();
             if shared_secret_params.is_none() {
-                let mut nonce = vec_try![0u8; SHARED_SECRET_PARAM_LEN]?;
+                let mut nonce = vec_try![0u8; SHARED_SECRET_PARAM_LEN].map_err(|_| {
+                    binder::Status::new_service_specific_error(
+                        ErrorCode::MemoryAllocationFailed as i32,
+                        None,
+                    )
+                })?;
                 hwcryptohalplatform::RngImpl.fill_bytes(&mut nonce);
                 *shared_secret_params = Some(SharedSecretParameters { seed: Vec::new(), nonce });
             }
@@ -69,15 +74,14 @@ impl SharedSecret {
         Ok(self.shared_secret_params.lock().unwrap().as_ref().unwrap().clone())
     }
 
-    fn compute_shared_secret(
-        &self,
-        params: &[SharedSecretParameters],
-    ) -> Result<Vec<u8>, HwCryptoError> {
+    fn compute_shared_secret(&self, params: &[SharedSecretParameters]) -> binder::Result<Vec<u8>> {
         info!("Setting HMAC key from {} shared secret parameters", params.len());
         let local_params_option = self.shared_secret_params.lock().unwrap();
-        let local_params = local_params_option
-            .as_ref()
-            .ok_or(hwcrypto_err!(GENERIC_ERROR, "no local shared secret params"))?;
+        let local_params =
+            local_params_option.as_ref().ok_or(binder::Status::new_service_specific_error(
+                ErrorCode::HardwareNotYetAvailable as i32,
+                Some(c"no local shared secret params"),
+            ))?;
 
         let context = shared_secret_context(params, local_params)?;
         DeviceKeysImpl::generate_keymint_shared_hmac_key(
@@ -86,6 +90,13 @@ impl SharedSecret {
             kmr_common::crypto::SHA256_DIGEST_LEN,
             kmr_wire::sharedsecret::KEY_CHECK_LABEL.as_bytes(),
         )
+        .map_err(|e| {
+            log::error!("Couldn't generate hmac key: {:?}", e);
+            binder::Status::new_service_specific_error(
+                ErrorCode::UnknownError as i32,
+                Some(c"error generating shared hmac key"),
+            )
+        })
     }
 }
 
@@ -94,26 +105,37 @@ impl SharedSecret {
 fn shared_secret_context(
     params: &[SharedSecretParameters],
     must_include: &SharedSecretParameters,
-) -> Result<Vec<u8>, HwCryptoError> {
+) -> binder::Result<Vec<u8>> {
     let mut result = Vec::new();
     let mut seen = false;
     for param in params {
-        result.try_extend_from_slice(&param.seed)?;
+        result.try_extend_from_slice(&param.seed).map_err(|_| {
+            binder::Status::new_service_specific_error(
+                ErrorCode::MemoryAllocationFailed as i32,
+                None,
+            )
+        })?;
         if param.nonce.len() != SHARED_SECRET_PARAM_LEN {
-            return Err(hwcrypto_err!(
-                GENERIC_ERROR,
-                "nonce len {} not {}",
-                param.nonce.len(),
-                SHARED_SECRET_PARAM_LEN
+            return Err(binder::Status::new_service_specific_error(
+                ErrorCode::InvalidArgument as i32,
+                Some(c"nonce len not 32"),
             ));
         }
-        result.try_extend_from_slice(&param.nonce)?;
+        result.try_extend_from_slice(&param.nonce).map_err(|_| {
+            binder::Status::new_service_specific_error(
+                ErrorCode::MemoryAllocationFailed as i32,
+                None,
+            )
+        })?;
         if param == must_include {
             seen = true;
         }
     }
     if !seen {
-        Err(hwcrypto_err!(GENERIC_ERROR, "shared secret params missing local value"))
+        Err(binder::Status::new_service_specific_error(
+            ErrorCode::InvalidArgument as i32,
+            Some(c"shared secret params missing local value"),
+        ))
     } else {
         Ok(result)
     }
