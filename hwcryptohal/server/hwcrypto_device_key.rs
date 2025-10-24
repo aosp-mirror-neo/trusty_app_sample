@@ -204,15 +204,22 @@ impl HwCryptoKey {
         let (caller_client_policy, device_key_policy) =
             ClientPolicyWrapper::from_encrypted_slice(client_policy_for_versioned_key)?
                 .into_client_and_device_key_policies()?;
-        let ClientPolicyCheck { policy_matches, policy_is_current } =
-            ClientIdentificationImpl::check_client_policy(
-                self.client_id.as_slice(),
-                caller_client_policy.as_slice(),
-            )?;
-        if check_client_policy_owner && !policy_matches {
+        let (policy_matches, policy_is_current) = if check_client_policy_owner {
+            let ClientPolicyCheck { policy_matches, policy_is_current } =
+                ClientIdentificationImpl::check_client_policy(
+                    self.client_id.as_slice(),
+                    caller_client_policy.as_slice(),
+                )?;
+            (policy_matches, policy_is_current)
+        } else {
+            // in this case we will not check the policy of the caller at all, it will be checked
+            // when unwrapping. We do not have a way to know if the policy is current in this case,
+            // so we will return that it is not.
+            (true, false)
+        };
+        if !policy_matches {
             return Err(hwcrypto_err!(BAD_PARAMETER, "client identity mismatch"));
         }
-
         // The returned key will only be used for derivation, so fixing tis type to HMAC_SHA256
         let key_type = KeyType::HMAC_SHA256;
         let key_size = opaque_key::get_key_size_in_bytes(&key_type)?;
