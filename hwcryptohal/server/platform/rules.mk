@@ -41,7 +41,11 @@ MODULE_LIBRARY_DEPS += \
 	$(call FIND_CRATE,log) \
 	trusty/user/base/lib/trusty-log \
 	trusty/user/base/lib/trusty-std \
-	$(call FIND_CRATE,vm-memory) \
+
+ifeq (true,$(call TOBOOL,$(HWCRYPTO_VM_CRATE_SUPPORT)))
+MODULE_LIBRARY_DEPS += $(call FIND_CRATE,vm-memory)
+
+endif
 
 MODULE_BINDGEN_ALLOW_FUNCTIONS := \
 	trusty_rng_.* \
@@ -49,5 +53,10 @@ MODULE_BINDGEN_ALLOW_FUNCTIONS := \
 MODULE_BINDGEN_SRC_HEADER := $(LOCAL_DIR)/bindings.h
 
 MODULE_RUST_USE_CLIPPY := true
+
+ifeq (true,$(call TOBOOL,$(HWCRYPTO_VM_CRATE_SUPPORT)))
+MODULE_RUSTFLAGS += --cfg 'feature="use_vm_memory_crate"'
+
+endif
 
 include make/library.mk

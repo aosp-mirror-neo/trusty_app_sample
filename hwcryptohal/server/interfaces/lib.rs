@@ -15,15 +15,22 @@
  */
 
 //! Module providing trait definitions
+mod boot_info;
 mod client_identification;
 mod device_keys;
+#[cfg(feature = "use_vm_memory_crate")]
 mod memory_access;
 mod test;
 mod time;
 
+pub use boot_info::{BootUniqueValue, UNIQUE_VALUE_SIZEOF};
 pub use client_identification::ClientIdentification;
 pub use client_identification::ClientPolicyCheck;
 pub use device_keys::{DeviceKeys, KeymintHmacKey};
+#[cfg(feature = "use_vm_memory_crate")]
 pub use memory_access::MemoryMappedObject;
-pub use test::{ClientIdentity, TestAllocatedPage, TestHelpers};
+pub use test::ClientIdentity;
+#[cfg(feature = "use_vm_memory_crate")]
+pub use test::TestAllocatedPage;
+pub use test::TestHelpers;
 pub use time::DeviceTime;

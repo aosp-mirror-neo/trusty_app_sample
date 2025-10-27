@@ -17,7 +17,9 @@
 //! Module providing trait definition to provided implementation of functions onyl required for
 //! testing.
 
+#[cfg(feature = "use_vm_memory_crate")]
 use binder::ParcelFileDescriptor;
+#[cfg(feature = "use_vm_memory_crate")]
 use hwcryptohal_common::err::HwCryptoError;
 
 /// Enum indicating which identity we are requesting from `TestHelpers::mock_client_id`
@@ -30,6 +32,7 @@ pub enum ClientIdentity {
 
 /// Trait to access a single page of memory allocated for the test. Implementers should use `Drop`
 /// for any cleanup required
+#[cfg(feature = "use_vm_memory_crate")]
 pub trait TestAllocatedPage {
     /// Returns a file descriptor that can be used to map this test page using a
     /// `MemoryMappedObject`. Calling this is unsafe because the caller have to make sure to not use
@@ -56,6 +59,7 @@ pub trait TestHelpers {
     /// `initial_data` doesn't need to cover the whole allocated memory. Any space not initialized
     /// by `initial_data` must be set to 0. This memory can be referenced latter using a
     /// `ParcelFileDescriptor`.
+    #[cfg(feature = "use_vm_memory_crate")]
     fn allocate_test_page(
         initial_data: Option<&[u8]>,
     ) -> Result<impl TestAllocatedPage, HwCryptoError>;

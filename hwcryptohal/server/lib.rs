@@ -40,17 +40,23 @@ mod service_encryption_key;
 pub use hwcrypto_device_key::HwCryptoKey;
 pub use secret::SharedSecret;
 
-use hwcryptohalinterfaces::{ClientIdentification, DeviceKeys, DeviceTime, MemoryMappedObject};
+#[cfg(feature = "use_vm_memory_crate")]
+use hwcryptohalinterfaces::MemoryMappedObject;
+use hwcryptohalinterfaces::{BootUniqueValue, ClientIdentification, DeviceKeys, DeviceTime};
+#[cfg(feature = "use_vm_memory_crate")]
+use hwcryptohalplatform::MemoryMappedObjectImpl;
 use hwcryptohalplatform::{
-    AesImpl, ClientIdentificationImpl, DeviceKeysImpl, DeviceTimeImpl, HmacImpl,
-    MemoryMappedObjectImpl, RngImpl,
+    AesImpl, BootUniqueValueImpl, ClientIdentificationImpl, DeviceKeysImpl, DeviceTimeImpl,
+    HmacImpl, RngImpl,
 };
 use kmr_common::crypto::{Aes, Hkdf, Hmac, Rng};
 use static_assertions::assert_impl_all;
 
+assert_impl_all!(BootUniqueValueImpl: BootUniqueValue);
 assert_impl_all!(ClientIdentificationImpl: ClientIdentification);
 assert_impl_all!(DeviceKeysImpl: DeviceKeys);
 assert_impl_all!(DeviceTimeImpl: DeviceTime);
+#[cfg(feature = "use_vm_memory_crate")]
 assert_impl_all!(MemoryMappedObjectImpl: MemoryMappedObject);
 
 assert_impl_all!(AesImpl: Aes);

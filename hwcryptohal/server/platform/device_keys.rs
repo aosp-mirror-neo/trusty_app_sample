@@ -76,9 +76,6 @@ impl TrustyDeviceKeysSingleton {
         key_len: usize,
         check_label: &[u8],
     ) -> Result<Vec<u8>, HwCryptoError> {
-        if self.keymint_shared_hmac_key.is_some() {
-            return Err(hwcrypto_err!(BAD_STATE, "hmac key have already been generated"));
-        }
         let key =
             kmr_crypto_boring::aes_cmac::BoringAesCmac.ckdf(&kak()?, label, &[context], key_len)?;
         let mut hmac_key = Vec::new();

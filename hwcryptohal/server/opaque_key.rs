@@ -21,7 +21,7 @@ use android_hardware_security_see_hwcrypto::aidl::android::hardware::security::s
     AesCipherMode::AesCipherMode, KeyLifetime::KeyLifetime, KeyPermissions::KeyPermissions,
     KeyType::KeyType, KeyUse::KeyUse, OpaqueKeyToken::OpaqueKeyToken, OperationType::OperationType,
     ProtectionId::ProtectionId, SymmetricCryptoParameters::SymmetricCryptoParameters,
-    SymmetricOperation::SymmetricOperation,
+    SymmetricOperation::SymmetricOperation, HalErrorCode,
 };
 use android_hardware_security_see_hwcrypto::aidl::android::hardware::security::see::hwcrypto::{
     IHwCryptoKey::{
@@ -34,10 +34,9 @@ use android_hardware_security_see_hwcrypto::aidl::android::hardware::security::s
 use android_hardware_security_see_hwcrypto::binder;
 use binder::binder_impl::Binder;
 use ciborium::Value;
-use core::fmt;
 use coset::{AsCborValue, CborSerializable, CoseError};
-use hwcryptohalinterfaces::DeviceTime;
-use hwcryptohalplatform::{AesImpl, DeviceTimeImpl, HmacImpl, RngImpl};
+use hwcryptohalinterfaces::{BootUniqueValue, DeviceTime, UNIQUE_VALUE_SIZEOF};
+use hwcryptohalplatform::{AesImpl, BootUniqueValueImpl, DeviceTimeImpl, HmacImpl, RngImpl};
 use hwcryptohal_common::{
     aidl_enum_wrapper, cose_enum_gen,
     err::HwCryptoError,
@@ -48,18 +47,15 @@ use hwcryptohal_common::{
     },
 };
 use kmr_common::{
-    crypto::{self, Aes, CurveType, Hkdf, Hmac, KeyMaterial, OpaqueOr, Rng},
+    crypto::{self, Aes, CurveType, Hkdf, Hmac, KeyMaterial, OpaqueOr},
     explicit, FallibleAllocExt,
 };
 use kmr_wire::{keymint::EcCurve, AsCborValue as _};
-use std::sync::{Mutex, OnceLock};
+use std::sync::Mutex;
 
 use crate::helpers;
 use crate::hwcrypto_device_key::HwCryptoKey;
 use crate::service_encryption_key::{EncryptedContent, EncryptionHeader, EncryptionHeaderKey};
-
-/// Number of bytes of unique value used to check if a key was created on current HWCrypto boot.
-const UNIQUE_VALUE_SIZEOF: usize = 32;
 
 const SEALING_KEY_DERIVATION_HMAC_256_CTX: &[u8] = b"SEALING_KEY_DERIVATION_HMAC_256_CTX";
 
@@ -67,53 +63,19 @@ const HW_CRYPTO_WRAP_KEY_HMAC_256_CTX: &[u8] = b"HW_CRYPTO_WRAP_KEY_HMAC_256_CTX
 
 const TOKEN_EXPORT_EXPIRATION_TIME_10S: u64 = 10;
 
-/// Struct to wrap boot unique counter. It is used to tag objects to the current boot.
-#[derive(Clone)]
-struct BootUniqueValue([u8; UNIQUE_VALUE_SIZEOF]);
-
-impl fmt::Debug for BootUniqueValue {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "[BootUniqueValue size: {UNIQUE_VALUE_SIZEOF}; data redacted]")
-    }
-}
-
-impl PartialEq for BootUniqueValue {
-    fn eq(&self, other: &Self) -> bool {
-        openssl::memcmp::eq(&self.0, &other.0)
-    }
-}
-
-impl Eq for BootUniqueValue {}
-
-impl BootUniqueValue {
-    fn new() -> Result<BootUniqueValue, HwCryptoError> {
-        get_boot_unique_value()
-    }
-}
-
-// Boot unique value is lazily initialized on the first call to retrieve it
-static BOOT_UNIQUE_VALUE: OnceLock<BootUniqueValue> = OnceLock::new();
-
-/// Retrieves boot unique value used to check if the key material was created on this boot. It
-/// lazily initializes it.
-fn get_boot_unique_value() -> Result<BootUniqueValue, HwCryptoError> {
-    // The function returns a `Result` even if it is currently infallible to allow replacing its
-    // current implementation with one that can fail when trying to retrieve a random number.
-    // If the RNG changes to a fallible one we could use `get_or_try_init`.
-    let boot_unique_value = BOOT_UNIQUE_VALUE.get_or_init(|| {
-        let mut new_boot_unique_value = BootUniqueValue([0u8; UNIQUE_VALUE_SIZEOF]);
-        RngImpl.fill_bytes(&mut new_boot_unique_value.0[..]);
-        new_boot_unique_value
-    });
-    Ok(boot_unique_value.clone())
-}
-
 #[allow(clippy::enum_variant_names)]
 #[derive(Copy, Clone)]
+// Enum used to get the prefixes for the different contexts used for key derivations
 pub(crate) enum HkdfOperationType {
+    // Key to be derived is DICE bound and uses a device key as derivation key.
     DiceBoundDerivation = 1,
+    // Key to be derived is DICE bound and uses an opaque key as derivation key.
+    ProvidedKeyDiceBoundDerivation = 2,
+    // Key to be derived is a clear key and uses an opaque key as derivation key.
     ClearKeyDerivation = 3,
+    // Key to be derived is an opaque key and uses an opaque key as derivation key.
     OpaqueKeyDerivation = 4,
+    // Key to be derived will be used to encrypt key tokens to be shared with a client.
     InternalSealingKeyDerivation = 5,
 }
 
@@ -500,20 +462,20 @@ impl KeyHeaderMetadata {
 /// the key.
 #[derive(Debug)]
 pub(crate) struct KeyHeader {
-    boot_unique_value: BootUniqueValue,
+    boot_unique_value: BootUniqueValueImpl,
     key_policy: KeyHeaderPolicy,
     key_metadata: Mutex<KeyHeaderMetadata>,
 }
 
 impl KeyHeader {
     fn new(policy: &KeyPolicy) -> Result<Self, HwCryptoError> {
-        let boot_unique_value = BootUniqueValue::new()?;
+        let boot_unique_value = BootUniqueValueImpl::new()?;
         Self::new_with_boot_value(policy, boot_unique_value)
     }
 
     fn new_with_boot_value(
         policy: &KeyPolicy,
-        boot_unique_value: BootUniqueValue,
+        boot_unique_value: BootUniqueValueImpl,
     ) -> Result<Self, HwCryptoError> {
         let key_policy = KeyHeaderPolicy::new(policy)?;
         let key_metadata = Mutex::new(KeyHeaderMetadata::new());
@@ -647,7 +609,7 @@ fn get_dice_sealing_key_derivation_context() -> Result<Vec<u8>, HwCryptoError> {
 
     context.try_reserve(SEALING_KEY_DERIVATION_HMAC_256_CTX.len() + UNIQUE_VALUE_SIZEOF)?;
     context.extend_from_slice(SEALING_KEY_DERIVATION_HMAC_256_CTX);
-    context.extend_from_slice(&get_boot_unique_value()?.0);
+    context.extend_from_slice(&BootUniqueValueImpl::new()?.get_unique_value_array());
 
     Ok(context)
 }
@@ -711,10 +673,8 @@ impl AsCborValue for OpaqueKey {
 
         let key = Value::Integer((OpaqueKeyCoseLabels::BootValue as i64).into());
         let mut boot_value = Vec::new();
-        boot_value
-            .try_reserve(self.key_header.boot_unique_value.0.len())
-            .map_err(|_| CoseError::EncodeFailed)?;
-        boot_value.extend_from_slice(&self.key_header.boot_unique_value.0);
+        boot_value.try_reserve(UNIQUE_VALUE_SIZEOF).map_err(|_| CoseError::EncodeFailed)?;
+        boot_value.extend_from_slice(&self.key_header.boot_unique_value.get_unique_value_array());
         cbor_map.push((key, Value::Bytes(boot_value)));
 
         let key = Value::Integer((OpaqueKeyCoseLabels::KeyMetadata as i64).into());
@@ -733,7 +693,7 @@ impl AsCborValue for OpaqueKey {
         }
         let mut key_material: Option<KeyMaterial> = None;
         let mut key_policy: Option<KeyPolicy> = None;
-        let mut boot_value: Option<BootUniqueValue> = None;
+        let mut boot_value: Option<BootUniqueValueImpl> = None;
         let mut key_metadata: Option<Value> = None;
         for (map_key, map_val) in opaque_key_map {
             match map_key {
@@ -753,11 +713,14 @@ impl AsCborValue for OpaqueKey {
                     }
                     OpaqueKeyCoseLabels::BootValue => {
                         let boot_value_bytes = map_val.as_bytes().ok_or(CoseError::EncodeFailed)?;
-                        boot_value = Some(BootUniqueValue(
-                            (boot_value_bytes.clone())
-                                .try_into()
-                                .map_err(|_| CoseError::EncodeFailed)?,
-                        ))
+                        boot_value = Some(
+                            BootUniqueValueImpl::new_from_array(
+                                (boot_value_bytes.clone())
+                                    .try_into()
+                                    .map_err(|_| CoseError::EncodeFailed)?,
+                            )
+                            .map_err(|_| CoseError::EncodeFailed)?,
+                        )
                     }
                     OpaqueKeyCoseLabels::KeyMetadata => key_metadata = Some(map_val),
                 },
@@ -1042,6 +1005,7 @@ impl OpaqueKey {
         derived_key_size: usize,
     ) -> Result<Vec<u8>, HwCryptoError> {
         self.expiration_time_valid()?;
+        self.key_can_be_used_for_derivation()?;
         let op_context = DerivationContext::new(HkdfOperationType::ClearKeyDerivation)?;
         self.derive_clear_key_from_derivation_context(op_context, context, derived_key_size)
     }
@@ -1061,6 +1025,27 @@ impl OpaqueKey {
         op_context.add_binary_string(context)?;
         let raw_key_material = self.derive_raw_key_material(op_context, derived_key_size)?;
         Self::new_opaque_key_from_raw_bytes(&aidl_policy, raw_key_material, client_conn_id)
+    }
+
+    // Derives a key bound to a DICE policy using this key as the derivation key. This means that
+    // this key needs to be an HMAC derivation key.
+    pub(crate) fn derive_dice_bound_key(
+        &self,
+        dice_policy: Vec<u8>,
+        derived_key_policy: &KeyPolicy,
+        client_conn_id: &[u8],
+    ) -> binder::Result<binder::Strong<dyn IOpaqueKey>> {
+        self.expiration_time_valid()?;
+        self.key_can_be_used_for_derivation()?;
+        let serialized_policy = policy::cbor_serialize_key_policy(&self.getKeyPolicy()?)?;
+        let mut op_context =
+            DerivationContext::new(HkdfOperationType::ProvidedKeyDiceBoundDerivation)?;
+        op_context.add_owned_binary_string(dice_policy)?;
+        op_context.add_owned_binary_string(serialized_policy)?;
+        self.check_key_derivation_parameters(derived_key_policy)?;
+        let derived_key_size = get_key_size_in_bytes(&derived_key_policy.keyType)?;
+        let raw_key_material = self.derive_raw_key_material(op_context, derived_key_size)?;
+        Self::new_opaque_key_from_raw_bytes(derived_key_policy, raw_key_material, client_conn_id)
     }
 
     fn derivation_allowed_lifetime(
@@ -1096,6 +1081,10 @@ impl OpaqueKey {
         }
     }
 
+    // checks if we can use the provided key for key derivation. Because we use HKDF for key
+    // derivation, we require that the provided key material can be used on HMAC operations.
+    // Additionally because we enforce that keys have single uses, we verify that the provided key
+    // usage is derivation.
     fn key_can_be_used_for_derivation(&self) -> Result<(), HwCryptoError> {
         match self.key_material {
             KeyMaterial::Hmac(_) => Ok(()),
@@ -1199,9 +1188,9 @@ impl IOpaqueKey for OpaqueKey {
         &self,
         _wrapping_key: &binder::Strong<dyn IOpaqueKey>,
     ) -> binder::Result<Vec<u8>> {
-        Err(binder::Status::new_exception_str(
-            binder::ExceptionCode::UNSUPPORTED_OPERATION,
-            Some("export_wrapped_key has not been implemented yet"),
+        Err(binder::Status::new_service_specific_error(
+            HalErrorCode::UNSUPPORTED,
+            Some(c"export_wrapped_key is not required"),
         ))
     }
 
@@ -1210,9 +1199,9 @@ impl IOpaqueKey for OpaqueKey {
     }
 
     fn getPublicKey(&self) -> binder::Result<Vec<u8>> {
-        Err(binder::Status::new_exception_str(
-            binder::ExceptionCode::UNSUPPORTED_OPERATION,
-            Some("get_public_key has not been implemented yet"),
+        Err(binder::Status::new_service_specific_error(
+            HalErrorCode::UNSUPPORTED,
+            Some(c"getPublicKey is not required"),
         ))
     }
 
@@ -1525,8 +1514,8 @@ mod tests {
 
     #[test]
     fn boot_unique_values_match() {
-        let boot_value = BootUniqueValue::new().expect("couldn't get boot unique value");
-        let boot_value2 = BootUniqueValue::new().expect("couldn't get boot unique value");
+        let boot_value = BootUniqueValueImpl::new().expect("couldn't get boot unique value");
+        let boot_value2 = BootUniqueValueImpl::new().expect("couldn't get boot unique value");
         expect_eq!(boot_value, boot_value2, "boot unique values should match");
     }
 

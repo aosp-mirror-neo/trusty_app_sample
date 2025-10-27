@@ -29,8 +29,17 @@ MODULE_LIBRARY_DEPS += \
 	trusty/user/app/sample/hwcryptohal/aidl/rust  \
 	trusty/user/app/sample/hwcryptohal/common  \
 	trusty/user/base/lib/keymint-rust/common \
-	$(call FIND_CRATE,vm-memory) \
+
+ifeq (true,$(call TOBOOL,$(HWCRYPTO_VM_CRATE_SUPPORT)))
+MODULE_LIBRARY_DEPS += $(call FIND_CRATE,vm-memory)
+
+endif
 
 MODULE_RUST_USE_CLIPPY := true
+
+ifeq (true,$(call TOBOOL,$(HWCRYPTO_VM_CRATE_SUPPORT)))
+MODULE_RUSTFLAGS += --cfg 'feature="use_vm_memory_crate"'
+
+endif
 
 include make/library.mk

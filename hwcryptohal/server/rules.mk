@@ -31,16 +31,23 @@ MODULE_LIBRARY_DEPS += \
 	trusty/user/base/interface/shared_secret/aidl \
 	trusty/user/app/sample/hwcryptohal/server/interfaces \
 	trusty/user/app/sample/hwcryptohal/server/platform \
-	trusty/user/base/lib/keymint-rust/boringssl \
 	trusty/user/base/lib/keymint-rust/common \
-	trusty/user/base/lib/openssl-rust \
 	$(call FIND_CRATE,log) \
 	$(call FIND_CRATE,static_assertions) \
 	trusty/user/base/lib/trusty-log \
-	$(call FIND_CRATE,vm-memory) \
+
+ifeq (true,$(call TOBOOL,$(HWCRYPTO_VM_CRATE_SUPPORT)))
+MODULE_LIBRARY_DEPS += $(call FIND_CRATE,vm-memory)
+
+endif
 
 MODULE_RUST_TESTS := true
 
 MODULE_RUST_USE_CLIPPY := true
+
+ifeq (true,$(call TOBOOL,$(HWCRYPTO_VM_CRATE_SUPPORT)))
+MODULE_RUSTFLAGS += --cfg 'feature="use_vm_memory_crate"'
+
+endif
 
 include make/library.mk
