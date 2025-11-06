@@ -16,15 +16,15 @@
 #include <binder/RpcServerTrusty.h>
 
 #include <android/trusty/cmdprocessor/BnCommandProcessor.h>
-#include <android/trusty/membuf/BnMemoryBufferShare.h>
+#include <android/trusty/membuf/BnMemoryBufferShareVm.h>
 
 using android::binder::Status;
 using android::os::ParcelFileDescriptor;
 using android::trusty::cmdprocessor::BnCommandProcessor;
 using android::trusty::cmdprocessor::ICommandProcessor;
 using android::trusty::cmdprocessor::MemoryBufferReference;
-using android::trusty::membuf::BnMemoryBufferShare;
-using android::trusty::membuf::IMemoryBufferShare;
+using android::trusty::membuf::BnMemoryBufferShareVm;
+using android::trusty::membuf::IMemoryBufferShareVm;
 using android::trusty::membuf::ShareMemoryBufferResult;
 using std::vector;
 
@@ -33,7 +33,7 @@ using std::vector;
 
 #define CMD_PROCESSOR_PORT \
     "android.trusty.cmdprocessor.ICommandProcessor/default"
-#define MEM_SHARE_PORT "android.trusty.membuf.IMemoryBufferShare/default"
+#define MEM_SHARE_PORT "android.trusty.membuf.IMemoryBufferShareVm/default"
 
 class CommandProcessor : public BnCommandProcessor {
 public:
@@ -54,7 +54,7 @@ public:
     }
 };
 
-class MemoryBufferShare : public BnMemoryBufferShare {
+class MemoryBufferShare : public BnMemoryBufferShareVm {
 public:
     static android::sp<MemoryBufferShare> Make(
             android::sp<android::RpcServerTrusty> srv) {
@@ -65,9 +65,10 @@ public:
 
     MemoryBufferShare() {}
 
-    Status shareMemoryBuffer(const ParcelFileDescriptor& fd,
+    Status shareMemoryBuffer(int64_t ipa,
                              int32_t sizeBytes,
                              ShareMemoryBufferResult* _aidl_return) override {
+        _aidl_return = nullptr;
         return Status::ok();
     }
 };

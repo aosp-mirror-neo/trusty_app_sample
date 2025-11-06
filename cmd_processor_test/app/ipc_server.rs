@@ -25,7 +25,7 @@ use tipc::{self, PortCfg, TipcError};
 pub(crate) const NUM_IPC_QUEUES: u32 = 4;
 
 const CMD_PROCESSOR_SERVICE_NAME: &str = "android.trusty.cmdprocessor.ICommandProcessor/default";
-const BUFFER_SHARE_SERVICE_NAME: &str = "android.trusty.membuf.IMemoryBufferShare/default";
+const BUFFER_SHARE_SERVICE_NAME: &str = "android.trusty.membuf.IMemoryBufferShareVm/default";
 
 #[derive(Error, Debug)]
 pub enum IpcError {

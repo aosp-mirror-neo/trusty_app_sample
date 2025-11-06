@@ -35,6 +35,7 @@ MODULE_INCLUDES:= \
 MODULE_AIDLS := \
     $(MEM_BUFF_AIDL_DIR)/$(MODULE_AIDL_PACKAGE)/IMemoryBufferContext.aidl    \
     $(MEM_BUFF_AIDL_DIR)/$(MODULE_AIDL_PACKAGE)/IMemoryBufferShare.aidl      \
+    $(MEM_BUFF_AIDL_DIR)/$(MODULE_AIDL_PACKAGE)/IMemoryBufferShareVm.aidl    \
     $(MEM_BUFF_AIDL_DIR)/$(MODULE_AIDL_PACKAGE)/MemoryBufferToken.aidl       \
     $(MEM_BUFF_AIDL_DIR)/$(MODULE_AIDL_PACKAGE)/ShareMemoryBufferResult.aidl \
 
