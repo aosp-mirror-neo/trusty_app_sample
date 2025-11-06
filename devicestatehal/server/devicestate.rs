@@ -20,6 +20,7 @@ use android_hardware_security_see_devicestate::aidl::android::hardware::security
     BnDeviceState, IDeviceState,
 };
 use android_hardware_security_see_devicestate::binder;
+use system_state::{ProvisioningAllowedFlagValues, SystemState, SystemStateFlag};
 
 pub struct DeviceState {}
 
@@ -29,11 +30,32 @@ impl DeviceState {
     pub(crate) fn new_binder() -> binder::Strong<dyn IDeviceState> {
         BnDeviceState::new_binder(DeviceState {}, binder::BinderFeatures::default())
     }
+
+    /// Retrieves the system state flag controlling provisioning.
+    fn get_system_state_provisioning_flag(&self) -> binder::Result<ProvisioningAllowedFlagValues> {
+        let to_status = |msg: String| {
+            binder::Status::new_exception_str(binder::ExceptionCode::TRANSACTION_FAILED, Some(msg))
+        };
+
+        let system_state_session = SystemState::try_connect()
+            .map_err(|e| to_status(format!("Failed to connect to system state provider: {e:?}")))?;
+        let flag =
+            system_state_session.get_flag(SystemStateFlag::ProvisioningAllowed).map_err(|e| {
+                to_status(format!("Failed to get ProvisioningAllowed system state flag: {e:?}"))
+            })?;
+        ProvisioningAllowedFlagValues::try_from(flag).map_err(|e| {
+            to_status(format!(
+                "Failed to parse ProvisioningAllowed system state flag from value {flag}: {e:?}"
+            ))
+        })
+    }
 }
 
 impl IDeviceState for DeviceState {
     fn provisioningAllowed(&self) -> binder::Result<bool> {
-        // TODO(b/454389557): Add actual logic for provisioningAllowed.
-        Ok(true)
+        Ok(matches!(
+            self.get_system_state_provisioning_flag()?,
+            ProvisioningAllowedFlagValues::ProvisioningAllowed
+        ))
     }
 }

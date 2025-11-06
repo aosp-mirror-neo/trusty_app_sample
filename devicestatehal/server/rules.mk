@@ -31,6 +31,7 @@ MODULE_LIBRARY_DEPS += \
     hardware/interfaces/security/see/devicestate/aidl \
     trusty/user/app/authmgr/authmgr-be/lib \
     trusty/user/base/lib/service_manager/client \
+    trusty/user/base/lib/system_state/rust \
     trusty/user/base/lib/tipc/rust \
 
 MODULE_RUST_TESTS := true
