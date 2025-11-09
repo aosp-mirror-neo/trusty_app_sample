@@ -10,21 +10,27 @@
 #include <trusty/sys/mman.h>
 #include <trusty_log.h>
 #include <uapi/mm.h>
+#include <iterator>
 #include <vector>
 
+#include <android/trusty/cmdprocessor/BnCommandProcessor.h>
+#include <android/trusty/membuf/BnMemoryBufferContext.h>
+#include <android/trusty/membuf/BnMemoryBufferShareVm.h>
 #include <binder/ParcelFileDescriptor.h>
 #include <binder/RpcServerTrusty.h>
 
-#include <android/trusty/cmdprocessor/BnCommandProcessor.h>
-#include <android/trusty/membuf/BnMemoryBufferShareVm.h>
+#include <interface/dmaimporter/dmaimporter.h>
 
 using android::binder::Status;
 using android::os::ParcelFileDescriptor;
 using android::trusty::cmdprocessor::BnCommandProcessor;
 using android::trusty::cmdprocessor::ICommandProcessor;
 using android::trusty::cmdprocessor::MemoryBufferReference;
+using android::trusty::membuf::BnMemoryBufferContext;
 using android::trusty::membuf::BnMemoryBufferShareVm;
+using android::trusty::membuf::IMemoryBufferContext;
 using android::trusty::membuf::IMemoryBufferShareVm;
+using android::trusty::membuf::MemoryBufferToken;
 using android::trusty::membuf::ShareMemoryBufferResult;
 using std::vector;
 
@@ -34,6 +40,17 @@ using std::vector;
 #define CMD_PROCESSOR_PORT \
     "android.trusty.cmdprocessor.ICommandProcessor/default"
 #define MEM_SHARE_PORT "android.trusty.membuf.IMemoryBufferShareVm/default"
+
+handle_t deserialize_token(const vector<uint8_t>& serialized_token) {
+    handle_t handle = 0;
+
+    for (auto element = serialized_token.rbegin();
+         element != serialized_token.rend(); ++element) {
+        handle = handle << 8;
+        handle |= *element;
+    }
+    return handle;
+}
 
 class CommandProcessor : public BnCommandProcessor {
 public:
@@ -50,8 +67,181 @@ public:
                           const vector<MemoryBufferReference>& memBufferRefs,
                           const vector<uint8_t>& cmdDataIn,
                           vector<uint8_t>* cmdDataOut) override {
+        TLOGI("processCommand called\n");
+        if (commandName == android::String16("print")) {
+            if (memBufferRefs.size() > 0) {
+                // We will use the first element on the cmdDataIn if present to
+                // indicate how many bytes to print or default to 5
+                size_t num_bytes_print = 5;
+                if (cmdDataIn.size() > 0) {
+                    num_bytes_print = cmdDataIn[0];
+                }
+                handle_t handle =
+                        deserialize_token(memBufferRefs[0].token.token);
+                TLOGI("Mapping handle: %x\n", handle);
+                void* mapped_address =
+                        mmap(0, 4096, PROT_READ | PROT_WRITE, 0, handle, 0);
+                if (mapped_address == NULL) {
+                    TLOGE("Couldn't map handle %x\n", handle);
+                    return Status::fromExceptionCode(Status::EX_ILLEGAL_STATE,
+                                                     "Couldn't map address");
+                }
+                uint8_t* mapped_data = (uint8_t*)mapped_address;
+                for (size_t i = 0; i < num_bytes_print; i++) {
+                    TLOGE("Received data[i]= %d\n", *mapped_data);
+                    mapped_data++;
+                }
+                int res = munmap(mapped_address, 4096);
+                if (res != 0) {
+                    TLOGE("munmap %p failed: %d\n", mapped_address, res);
+                }
+            } else {
+                TLOGE("Didn't receive memory buffers to print\n");
+                return Status::fromExceptionCode(
+                        Status::EX_ILLEGAL_ARGUMENT,
+                        "Didn't receive memory buffers to print");
+            }
+        } else if (commandName == android::String16("increment")) {
+            if (memBufferRefs.size() > 0) {
+                handle_t handle =
+                        deserialize_token(memBufferRefs[0].token.token);
+                TLOGI("Mapping handle: %x\n", handle);
+                void* mapped_address =
+                        mmap(0, 4096, PROT_READ | PROT_WRITE, 0, handle, 0);
+                if (mapped_address == NULL) {
+                    TLOGE("Couldn't map handle %x\n", handle);
+                    return Status::fromExceptionCode(Status::EX_ILLEGAL_STATE,
+                                                     "Couldn't map address");
+                }
+                uint8_t* mapped_data = (uint8_t*)mapped_address;
+                *mapped_data += 1;
+                int res = munmap(mapped_address, 4096);
+                if (res != 0) {
+                    TLOGE("munmap %p failed: %d\n", mapped_address, res);
+                }
+            } else {
+                TLOGE("Didn't receive memory buffers to increment\n");
+                return Status::fromExceptionCode(
+                        Status::EX_ILLEGAL_ARGUMENT,
+                        "Didn't receive memory buffers to increment");
+            }
+
+        } else if (commandName == android::String16("ping")) {
+            TLOGI("ping!!!!!\n");
+        } else {
+            TLOGE("Unknown command received\n");
+            return Status::fromExceptionCode(Status::EX_ILLEGAL_ARGUMENT,
+                                             "Unknown command received");
+        }
         return Status::ok();
     }
+};
+
+int get_ext_mem(uint64_t ipa, uint64_t len, handle_t* handle) {
+    if (handle == nullptr) {
+        TLOGE("Received a null handle pointer\n");
+        return ERR_INVALID_ARGS;
+    }
+    handle_t rec_handles[1];
+    struct dmaimporter_req req_hdr = {.ipa = ipa, .len = len};
+    struct iovec tx_iov = {
+            .iov_base = &req_hdr,
+            .iov_len = sizeof(req_hdr),
+    };
+
+    ipc_msg_t tx_msg = {
+            .num_iov = 1,
+            .iov = &tx_iov,
+    };
+
+    struct iovec rx_iov = {
+            .iov_base = handle,
+            .iov_len = len,
+    };
+    ipc_msg_t rx_msg = {
+            .num_iov = 1,
+            .iov = &rx_iov,
+            .num_handles = 1,
+            .handles = rec_handles,
+    };
+    TLOGI("Connecting to port %s\n", DMAIMPORTER_PORT);
+    long rc = connect(DMAIMPORTER_PORT, IPC_CONNECT_WAIT_FOR_PORT);
+    if (rc < 0) {
+        TLOGE("error connecting to port %s: %ld\n", DMAIMPORTER_PORT, rc);
+        return rc;
+    }
+    handle_t chan = (handle_t)rc;
+    rc = send_msg(chan, &tx_msg);
+    if (rc < 0) {
+        TLOGE("sending message to dma importer failed %ld\n", rc);
+        goto err;
+    }
+    if (rc != sizeof(req_hdr)) {
+        TLOGE("wrong req_hdr size for dma importer received %ld\n", rc);
+        goto err;
+    }
+    TLOGI("Waiting on channel\n");
+    uevent_t uevt;
+    rc = wait(chan, &uevt, INFINITE_TIME);
+    if (rc != NO_ERROR) {
+        TLOGE("wait for dma importer event failed %ld\n", rc);
+        goto err;
+    }
+    ipc_msg_info_t inf;
+    rc = get_msg(chan, &inf);
+    if (rc != NO_ERROR) {
+        TLOGE("error receiving event data for dma importer %ld\n", rc);
+        goto err;
+    }
+    if (inf.len != 0) {
+        TLOGE("should not have received data %ld\n", rc);
+        goto err;
+    }
+    rc = read_msg(chan, inf.id, 0, &rx_msg);
+    if (rc < 0) {
+        TLOGE("error reading data for dma importer %ld\n", rc);
+    }
+    if (rec_handles[0] > 0) {
+        *handle = rec_handles[0];
+    }
+
+err:
+    close(chan);
+    return rc;
+}
+
+class MemoryBufferContext : public BnMemoryBufferContext {
+public:
+    static android::sp<MemoryBufferContext> Make(handle_t handle) {
+        auto self = android::sp<MemoryBufferContext>::make(handle);
+        return self;
+    }
+
+    MemoryBufferContext(handle_t handle) : handle_(handle) {}
+
+    Status getPortableToken(MemoryBufferToken* aidl_return) override {
+        TLOGI("In getPortableToken\n");
+        if (aidl_return == nullptr) {
+            TLOGE("Received a null MemoryBufferToken\n");
+            return Status::fromExceptionCode(
+                    Status::EX_NULL_POINTER,
+                    "Received a null MemoryBufferToken");
+        }
+        // TODO: check if we should provide tampering protection to the token
+        vector<uint8_t> serialized_token;
+        TLOGI("serializing handle %x\n", handle_);
+        handle_t token = handle_;
+        for (size_t i = 0; i < sizeof(handle_t); i++) {
+            uint8_t element = token & 0xff;
+            serialized_token.push_back(element);
+            token = token >> 8;
+        }
+        aidl_return->token = std::move(serialized_token);
+        return Status::ok();
+    }
+
+private:
+    handle_t handle_;
 };
 
 class MemoryBufferShare : public BnMemoryBufferShareVm {
@@ -67,8 +257,25 @@ public:
 
     Status shareMemoryBuffer(int64_t ipa,
                              int32_t sizeBytes,
-                             ShareMemoryBufferResult* _aidl_return) override {
-        _aidl_return = nullptr;
+                             ShareMemoryBufferResult* aidl_return) override {
+        TLOGI("In shareMemoryBuffer\n");
+        if (aidl_return == nullptr) {
+            TLOGE("reReceived a null ShareMemoryBufferResult\n");
+            return Status::fromExceptionCode(
+                    Status::EX_NULL_POINTER,
+                    "Received a null ShareMemoryBufferResult");
+        }
+        handle_t handle;
+        int rc = get_ext_mem(ipa, sizeBytes, &handle);
+        if (rc < 0) {
+            TLOGE("Couldn't get memory handle from ipa: %d\n", rc);
+            return Status::fromExceptionCode(
+                    Status::EX_ILLEGAL_STATE,
+                    "Couldn't get memory handle from ipa");
+        }
+        android::sp<MemoryBufferContext> mem_buffer_ctx =
+                MemoryBufferContext::Make(handle);
+        aidl_return->context = mem_buffer_ctx;
         return Status::ok();
     }
 };
