@@ -28,7 +28,6 @@ MODULE_LIBRARY_DEPS += \
 	frameworks/native/libs/binder/trusty/rust \
 	hardware/interfaces/security/see/devicestate/aidl \
 	trusty/user/base/lib/service_manager/client \
-	trusty/user/base/lib/system_state/rust \
 	trusty/user/base/lib/trusty-std \
 
 MODULE_RUST_TESTS := true

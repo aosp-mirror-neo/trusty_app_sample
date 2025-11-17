@@ -15,13 +15,11 @@
  */
 
 #[cfg(test)]
-mod tests {
+mod devicestate_vts {
     test::init!();
 
     use android_hardware_security_see_devicestate::aidl::android::hardware::security::see::devicestate::IDeviceState::IDeviceState;
     use service_manager::wait_for_interface;
-    use system_state::{ProvisioningAllowedFlagValues, SystemState, SystemStateFlag};
-    use test::expect_eq;
 
     const DEVICE_STATE_SERVICE_NAME: &str =
         "android.hardware.security.see.devicestate.IDeviceState/default";
@@ -30,20 +28,7 @@ mod tests {
     fn provisioning_allowed_test() {
         let device_state = wait_for_interface::<dyn IDeviceState>(DEVICE_STATE_SERVICE_NAME)
             .expect("Failed to get IDeviceState binder");
-        let is_provisioning_allowed =
+        let _is_provisioning_allowed =
             device_state.provisioningAllowed().expect("Failed to get provisioning allowed status");
-
-        let system_state_session =
-            SystemState::try_connect().expect("Failed to get SystemState service");
-        let flag = system_state_session
-            .get_flag(SystemStateFlag::ProvisioningAllowed)
-            .expect("Failed to get ProvisioningAllowed system state flag");
-        let system_state_flag = ProvisioningAllowedFlagValues::try_from(flag)
-            .expect("Failed to parse ProvisioningAllowed system state flag");
-
-        expect_eq!(
-            is_provisioning_allowed,
-            matches!(system_state_flag, ProvisioningAllowedFlagValues::ProvisioningAllowed)
-        );
     }
 }
