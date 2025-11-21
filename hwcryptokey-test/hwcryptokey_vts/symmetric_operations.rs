@@ -103,14 +103,14 @@ fn decrypt(
 #[test]
 fn generate_new_policy_and_opaque_key() {
     let hw_device_key = get_hwcryptokey().expect("couldn't connect to HW Crypto service");
-    let hw_crypto = hw_device_key.getHwCryptoOperations().expect("couldn't get key crypto ops.");
+    let hw_crypto = hw_device_key.get_hwcrypto_operations().expect("couldn't get key crypto ops.");
 
     // Get the device bound key
     let device_bound_key = DiceBoundDerivationKey::KeyId(DeviceKeyId::DEVICE_BOUND_KEY);
 
     // Generate the current derivation key and policy
     let key_and_policy =
-        assert_ok!(hw_device_key.deriveCurrentDicePolicyBoundKey(&device_bound_key));
+        assert_ok!(hw_device_key.derive_current_dice_policy_bound_key(&device_bound_key));
     let DiceCurrentBoundKeyResult {
         diceBoundKey: derivation_key1,
         dicePolicyForKeyVersion: dice_policy,
@@ -138,7 +138,7 @@ fn generate_new_policy_and_opaque_key() {
         context: "context".as_bytes().to_vec(),
     };
 
-    let derived_key1 = assert_ok!(hw_device_key.deriveKey(&params));
+    let derived_key1 = assert_ok!(hw_device_key.derive_key(&params));
 
     // Check key type
     let derived_key1 = match derived_key1 {
@@ -160,7 +160,7 @@ fn generate_new_policy_and_opaque_key() {
 
     // Use dice policy to request same derivation key
     let key_and_policy =
-        assert_ok!(hw_device_key.deriveDicePolicyBoundKey(&device_bound_key, &dice_policy));
+        assert_ok!(hw_device_key.derive_dice_policy_bound_key(&device_bound_key, &dice_policy));
     let DiceBoundKeyResult {
         diceBoundKey: derivation_key2,
         dicePolicyWasCurrent: dice_policy_current,
@@ -172,7 +172,7 @@ fn generate_new_policy_and_opaque_key() {
     // Generate derived key 2
     params.derivationKey = derivation_key2;
 
-    let derived_key2 = assert_ok!(hw_device_key.deriveKey(&params));
+    let derived_key2 = assert_ok!(hw_device_key.derive_key(&params));
 
     // Check key type
     let derived_key2 = match derived_key2 {
@@ -192,7 +192,7 @@ fn generate_new_policy_and_opaque_key() {
 
     // Generate the current derivation key and policy again
     let key_and_policy =
-        assert_ok!(hw_device_key.deriveCurrentDicePolicyBoundKey(&device_bound_key));
+        assert_ok!(hw_device_key.derive_current_dice_policy_bound_key(&device_bound_key));
     let DiceCurrentBoundKeyResult {
         diceBoundKey: derivation_key3,
         dicePolicyForKeyVersion: dice_policy3,
@@ -207,7 +207,7 @@ fn generate_new_policy_and_opaque_key() {
     // Ensure derived key from this policy matches previously generated derived key
     params.derivationKey = derivation_key3;
 
-    let derived_key3 = assert_ok!(hw_device_key.deriveKey(&params));
+    let derived_key3 = assert_ok!(hw_device_key.derive_key(&params));
 
     // Check key type
     let derived_key3 = match derived_key3 {
@@ -231,14 +231,14 @@ fn generate_new_policy_and_opaque_key() {
 #[test]
 fn opaque_keys_unique_by_context() {
     let hw_device_key = get_hwcryptokey().expect("couldn't connect to HW Crypto service");
-    let hw_crypto = hw_device_key.getHwCryptoOperations().expect("couldn't get key crypto ops.");
+    let hw_crypto = hw_device_key.get_hwcrypto_operations().expect("couldn't get key crypto ops.");
 
     // Get the device bound key
     let device_bound_key = DiceBoundDerivationKey::KeyId(DeviceKeyId::DEVICE_BOUND_KEY);
 
     // Generate the current derivation key and policy
     let key_and_policy =
-        assert_ok!(hw_device_key.deriveCurrentDicePolicyBoundKey(&device_bound_key));
+        assert_ok!(hw_device_key.derive_current_dice_policy_bound_key(&device_bound_key));
     let DiceCurrentBoundKeyResult {
         diceBoundKey: derivation_key,
         dicePolicyForKeyVersion: dice_policy,
@@ -269,7 +269,7 @@ fn opaque_keys_unique_by_context() {
         context: context1.as_bytes().to_vec(),
     };
 
-    let derived_key1 = assert_ok!(hw_device_key.deriveKey(&params1));
+    let derived_key1 = assert_ok!(hw_device_key.derive_key(&params1));
 
     // Check key type
     let derived_key1 = match derived_key1 {
@@ -303,7 +303,7 @@ fn opaque_keys_unique_by_context() {
         context: context2.as_bytes().to_vec(),
     };
 
-    let derived_key2 = assert_ok!(hw_device_key.deriveKey(&params2));
+    let derived_key2 = assert_ok!(hw_device_key.derive_key(&params2));
 
     // Check key type
     let derived_key2 = match derived_key2 {
@@ -325,13 +325,14 @@ fn opaque_keys_unique_by_context() {
 fn aes_simple_test_from_binder() {
     let hw_device_key = assert_ok!(get_hwcryptokey(), "couldn't retrieve hw crypto binder");
     let derivation_key = DiceBoundDerivationKey::KeyId(DeviceKeyId::DEVICE_BOUND_KEY);
-    let key_and_policy = assert_ok!(hw_device_key.deriveCurrentDicePolicyBoundKey(&derivation_key));
+    let key_and_policy =
+        assert_ok!(hw_device_key.derive_current_dice_policy_bound_key(&derivation_key));
     let DiceCurrentBoundKeyResult { diceBoundKey: key, dicePolicyForKeyVersion: policy } =
         key_and_policy;
     expect!(key.is_some(), "should have received a key");
     expect!(policy.len() > 0, "should have received a DICE policy");
 
-    let hw_crypto = hw_device_key.getHwCryptoOperations().expect("Failed to get crypto ops.");
+    let hw_crypto = hw_device_key.get_hwcrypto_operations().expect("Failed to get crypto ops.");
     let usage = KeyUse::ENCRYPT_DECRYPT;
     let key_type = KeyType::AES_256_CBC_PKCS7_PADDING;
     let policy = KeyPolicy {
@@ -350,7 +351,7 @@ fn aes_simple_test_from_binder() {
         keyPolicy: key_policy,
         context: "context".as_bytes().to_vec(),
     };
-    let derived_key = assert_ok!(hw_device_key.deriveKey(&params));
+    let derived_key = assert_ok!(hw_device_key.derive_key(&params));
     let key = match derived_key {
         DerivedKey::Opaque(key) => key.expect("key shouldn't be NULL"),
         DerivedKey::ExplicitKey(_) => panic!("wrong type of key received"),
@@ -428,7 +429,7 @@ fn aes_simple_test_from_binder() {
 #[test]
 fn import_clear_aes_key() {
     let hw_key = assert_ok!(get_hwcryptokey(), "couldn't retrieve hw crypto binder");
-    let hw_crypto = hw_key.getHwCryptoOperations().expect("couldn't get key crypto ops.");
+    let hw_crypto = hw_key.get_hwcrypto_operations().expect("couldn't get key crypto ops.");
     let usage = KeyUse::ENCRYPT_DECRYPT;
     let key_type = KeyType::AES_128_CBC_PKCS7_PADDING;
     let policy = KeyPolicy {
@@ -439,7 +440,7 @@ fn import_clear_aes_key() {
         keyManagementKey: false,
     };
     let aes_key_material: ExplicitKeyMaterial = ExplicitKeyMaterial::Aes(AesKey::Aes128([0; 16]));
-    let key = hw_key.importClearKey(&aes_key_material, &policy).expect("couldn't import key");
+    let key = hw_key.import_clear_key(&aes_key_material, &policy).expect("couldn't import key");
     let nonce = [0u8; 16];
     let parameters = SymmetricCryptoParameters::Aes(AesCipherMode::Cbc(CipherModeParameters {
         nonce: nonce.into(),
@@ -497,7 +498,7 @@ fn import_clear_aes_key() {
 #[test]
 fn create_key_tokens() {
     let hw_key = assert_ok!(get_hwcryptokey(), "couldn't retrieve hw crypto binder");
-    let hw_crypto = hw_key.getHwCryptoOperations().expect("couldn't get key crypto ops.");
+    let hw_crypto = hw_key.get_hwcrypto_operations().expect("couldn't get key crypto ops.");
     let usage = KeyUse::ENCRYPT_DECRYPT;
     let key_type = KeyType::AES_128_CBC_PKCS7_PADDING;
     let policy = KeyPolicy {
@@ -508,9 +509,9 @@ fn create_key_tokens() {
         keyManagementKey: false,
     };
     let aes_key_material: ExplicitKeyMaterial = ExplicitKeyMaterial::Aes(AesKey::Aes128([0; 16]));
-    let key = hw_key.importClearKey(&aes_key_material, &policy).expect("couldn't import key");
+    let key = hw_key.import_clear_key(&aes_key_material, &policy).expect("couldn't import key");
 
-    let sealing_client_policy = hw_key.getCurrentDicePolicy().expect("couldn't get sealing policy");
+    let sealing_client_policy = hw_key.current_dice_policy().expect("couldn't get sealing policy");
 
     let token = key.getShareableToken(&sealing_client_policy);
     expect!(token.is_ok(), "couldn't get shareadble token");
@@ -542,8 +543,8 @@ fn create_key_tokens() {
     };
 
     let hw_key = assert_ok!(get_hwcryptokey(), "couldn't retrieve hw crypto binder");
-    let hw_crypto = hw_key.getHwCryptoOperations().expect("couldn't get key crypto ops.");
-    let key = hw_key.keyTokenImport(&token, &sealing_client_policy);
+    let hw_crypto = hw_key.get_hwcrypto_operations().expect("couldn't get key crypto ops.");
+    let key = hw_key.key_token_import(&token, &sealing_client_policy);
     expect!(key.is_ok(), "couldn't import shareable token");
     let key = key.unwrap();
 

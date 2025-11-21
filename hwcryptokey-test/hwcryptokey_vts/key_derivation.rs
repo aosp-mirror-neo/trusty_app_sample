@@ -54,7 +54,7 @@ fn generate_new_policy_and_clear_key() {
 
     // Generate the current derivation key and policy
     let key_and_policy =
-        assert_ok!(hw_device_key.deriveCurrentDicePolicyBoundKey(&device_bound_key));
+        assert_ok!(hw_device_key.derive_current_dice_policy_bound_key(&device_bound_key));
     let DiceCurrentBoundKeyResult {
         diceBoundKey: derivation_key1,
         dicePolicyForKeyVersion: dice_policy,
@@ -70,7 +70,7 @@ fn generate_new_policy_and_clear_key() {
         context: "context".as_bytes().to_vec(),
     };
 
-    let derived_key1 = assert_ok!(hw_device_key.deriveKey(&params));
+    let derived_key1 = assert_ok!(hw_device_key.derive_key(&params));
 
     // Check key type and length
     let derived_key1 = match derived_key1 {
@@ -82,7 +82,7 @@ fn generate_new_policy_and_clear_key() {
 
     // Use dice policy to request same key
     let key_and_policy =
-        assert_ok!(hw_device_key.deriveDicePolicyBoundKey(&device_bound_key, &dice_policy));
+        assert_ok!(hw_device_key.derive_dice_policy_bound_key(&device_bound_key, &dice_policy));
     let DiceBoundKeyResult {
         diceBoundKey: derivation_key2,
         dicePolicyWasCurrent: dice_policy_current,
@@ -94,7 +94,7 @@ fn generate_new_policy_and_clear_key() {
     // generate derived key 2 and compare to key 1
     params.derivationKey = derivation_key2;
 
-    let derived_key2 = assert_ok!(hw_device_key.deriveKey(&params));
+    let derived_key2 = assert_ok!(hw_device_key.derive_key(&params));
 
     // Check key type and length
     let derived_key2 = match derived_key2 {
@@ -113,7 +113,7 @@ fn generate_new_policy_and_clear_key() {
 
     // Generate the current derivation key and policy again
     let key_and_policy =
-        assert_ok!(hw_device_key.deriveCurrentDicePolicyBoundKey(&device_bound_key));
+        assert_ok!(hw_device_key.derive_current_dice_policy_bound_key(&device_bound_key));
     let DiceCurrentBoundKeyResult {
         diceBoundKey: derivation_key3,
         dicePolicyForKeyVersion: dice_policy3,
@@ -128,7 +128,7 @@ fn generate_new_policy_and_clear_key() {
     // Ensure derived key from this policy matches previously generated derived key
     params.derivationKey = derivation_key3;
 
-    let derived_key3 = assert_ok!(hw_device_key.deriveKey(&params));
+    let derived_key3 = assert_ok!(hw_device_key.derive_key(&params));
 
     // Check key type and length
     let derived_key3 = match derived_key3 {
@@ -151,14 +151,14 @@ fn dice_updates_are_unique() {
 
     // Get current dice policy multiple times
     let key_and_policy =
-        assert_ok!(hw_device_key.deriveCurrentDicePolicyBoundKey(&device_bound_key));
+        assert_ok!(hw_device_key.derive_current_dice_policy_bound_key(&device_bound_key));
     let DiceCurrentBoundKeyResult {
         diceBoundKey: derivation_key1,
         dicePolicyForKeyVersion: dice_policy1,
     } = key_and_policy;
 
     let key_and_policy =
-        assert_ok!(hw_device_key.deriveCurrentDicePolicyBoundKey(&device_bound_key));
+        assert_ok!(hw_device_key.derive_current_dice_policy_bound_key(&device_bound_key));
     let DiceCurrentBoundKeyResult {
         diceBoundKey: derivation_key2,
         dicePolicyForKeyVersion: dice_policy2,
@@ -179,7 +179,7 @@ fn dice_updates_are_unique() {
         context: "context".as_bytes().to_vec(),
     };
 
-    let derived_key1 = assert_ok!(hw_device_key.deriveKey(&params));
+    let derived_key1 = assert_ok!(hw_device_key.derive_key(&params));
 
     let params = DerivedKeyParameters {
         derivationKey: derivation_key2,
@@ -187,7 +187,7 @@ fn dice_updates_are_unique() {
         context: "context".as_bytes().to_vec(),
     };
 
-    let derived_key2 = assert_ok!(hw_device_key.deriveKey(&params));
+    let derived_key2 = assert_ok!(hw_device_key.derive_key(&params));
 
     // Check derived keys
     let derived_key1 = match derived_key1 {
@@ -205,14 +205,14 @@ fn dice_updates_are_unique() {
 
     // Check that both dice policies are considered current
     let key_and_policy =
-        assert_ok!(hw_device_key.deriveDicePolicyBoundKey(&device_bound_key, &dice_policy1));
+        assert_ok!(hw_device_key.derive_dice_policy_bound_key(&device_bound_key, &dice_policy1));
     let DiceBoundKeyResult { diceBoundKey: _, dicePolicyWasCurrent: dice_policy1_current } =
         key_and_policy;
 
     expect!(dice_policy1_current, "policy expected to be current");
 
     let key_and_policy =
-        assert_ok!(hw_device_key.deriveDicePolicyBoundKey(&device_bound_key, &dice_policy2));
+        assert_ok!(hw_device_key.derive_dice_policy_bound_key(&device_bound_key, &dice_policy2));
     let DiceBoundKeyResult { diceBoundKey: _, dicePolicyWasCurrent: dice_policy2_current } =
         key_and_policy;
 
@@ -228,7 +228,7 @@ fn explicit_keys_unique_by_context() {
 
     // Generate the current derivation key and policy
     let key_and_policy =
-        assert_ok!(hw_device_key.deriveCurrentDicePolicyBoundKey(&device_bound_key));
+        assert_ok!(hw_device_key.derive_current_dice_policy_bound_key(&device_bound_key));
     let DiceCurrentBoundKeyResult {
         diceBoundKey: derivation_key,
         dicePolicyForKeyVersion: dice_policy,
@@ -253,8 +253,8 @@ fn explicit_keys_unique_by_context() {
         context: context2.as_bytes().to_vec(),
     };
 
-    let derived_key1 = assert_ok!(hw_device_key.deriveKey(&params1));
-    let derived_key2 = assert_ok!(hw_device_key.deriveKey(&params2));
+    let derived_key1 = assert_ok!(hw_device_key.derive_key(&params1));
+    let derived_key2 = assert_ok!(hw_device_key.derive_key(&params2));
 
     // Check key2 type and length
     let derived_key1 = match derived_key1 {
@@ -287,7 +287,7 @@ fn invalid_key_sizes() {
 
     // Generate the current derivation key and policy
     let key_and_policy =
-        assert_ok!(hw_device_key.deriveCurrentDicePolicyBoundKey(&device_bound_key));
+        assert_ok!(hw_device_key.derive_current_dice_policy_bound_key(&device_bound_key));
     let DiceCurrentBoundKeyResult {
         diceBoundKey: derivation_key,
         dicePolicyForKeyVersion: dice_policy,
@@ -303,7 +303,7 @@ fn invalid_key_sizes() {
         context: "context".as_bytes().to_vec(),
     };
 
-    let derived_key = hw_device_key.deriveKey(&params);
+    let derived_key = hw_device_key.derive_key(&params);
     expect!(derived_key.is_err(), "expected error on bad key size");
 
     // Request a negative length key
@@ -313,7 +313,7 @@ fn invalid_key_sizes() {
         context: "context".as_bytes().to_vec(),
     };
 
-    let derived_key = hw_device_key.deriveKey(&params);
+    let derived_key = hw_device_key.derive_key(&params);
     expect!(derived_key.is_err(), "expected error on bad key size");
 }
 
@@ -326,7 +326,7 @@ fn large_context() {
 
     // Generate the current derivation key and policy
     let key_and_policy =
-        assert_ok!(hw_device_key.deriveCurrentDicePolicyBoundKey(&device_bound_key));
+        assert_ok!(hw_device_key.derive_current_dice_policy_bound_key(&device_bound_key));
     let DiceCurrentBoundKeyResult {
         diceBoundKey: derivation_key,
         dicePolicyForKeyVersion: dice_policy,
@@ -347,7 +347,7 @@ fn large_context() {
         context: context.clone(),
     };
 
-    let derived_key1 = assert_ok!(hw_device_key.deriveKey(&params));
+    let derived_key1 = assert_ok!(hw_device_key.derive_key(&params));
 
     // Check key type and length
     let derived_key1 = match derived_key1 {
@@ -366,7 +366,7 @@ fn large_context() {
         context: context.clone(),
     };
 
-    let derived_key2 = assert_ok!(hw_device_key.deriveKey(&params));
+    let derived_key2 = assert_ok!(hw_device_key.derive_key(&params));
 
     // Check key type and length
     let derived_key2 = match derived_key2 {
@@ -389,26 +389,28 @@ fn derived_dice_bound_keys() {
     let hw_device_key = assert_ok!(get_hwcryptokey(), "couldn't retrieve hw crypto binder");
 
     let derivation_key = DiceBoundDerivationKey::KeyId(DeviceKeyId::DEVICE_BOUND_KEY);
-    let key_and_policy = assert_ok!(hw_device_key.deriveCurrentDicePolicyBoundKey(&derivation_key));
+    let key_and_policy =
+        assert_ok!(hw_device_key.derive_current_dice_policy_bound_key(&derivation_key));
     let DiceCurrentBoundKeyResult { diceBoundKey: key, dicePolicyForKeyVersion: policy } =
         key_and_policy;
     expect!(key.is_some(), "should have received a key");
     expect!(policy.len() > 0, "should have received a DICE policy");
     let key_and_policy =
-        assert_ok!(hw_device_key.deriveDicePolicyBoundKey(&derivation_key, &policy));
+        assert_ok!(hw_device_key.derive_dice_policy_bound_key(&derivation_key, &policy));
     let DiceBoundKeyResult { diceBoundKey: key, dicePolicyWasCurrent: current_policy } =
         key_and_policy;
     expect!(key.is_some(), "should have received a key");
     expect!(current_policy, "policy should have been current");
 
     let derivation_key = DiceBoundDerivationKey::KeyId(DeviceKeyId::DEVICE_BOUND_KEY);
-    let key_and_policy = assert_ok!(hw_device_key.deriveCurrentDicePolicyBoundKey(&derivation_key));
+    let key_and_policy =
+        assert_ok!(hw_device_key.derive_current_dice_policy_bound_key(&derivation_key));
     let DiceCurrentBoundKeyResult { diceBoundKey: key, dicePolicyForKeyVersion: policy } =
         key_and_policy;
     expect!(key.is_some(), "should have received a key");
     expect!(policy.len() > 0, "should have received a DICE policy");
     let key_and_policy =
-        assert_ok!(hw_device_key.deriveDicePolicyBoundKey(&derivation_key, &policy));
+        assert_ok!(hw_device_key.derive_dice_policy_bound_key(&derivation_key, &policy));
     let DiceBoundKeyResult { diceBoundKey: key, dicePolicyWasCurrent: current_policy } =
         key_and_policy;
     expect!(key.is_some(), "should have received a key");
@@ -420,7 +422,8 @@ fn derived_clear_key() {
     let hw_device_key = assert_ok!(get_hwcryptokey(), "couldn't retrieve hw crypto binder");
 
     let derivation_key = DiceBoundDerivationKey::KeyId(DeviceKeyId::DEVICE_BOUND_KEY);
-    let key_and_policy = assert_ok!(hw_device_key.deriveCurrentDicePolicyBoundKey(&derivation_key));
+    let key_and_policy =
+        assert_ok!(hw_device_key.derive_current_dice_policy_bound_key(&derivation_key));
     let DiceCurrentBoundKeyResult { diceBoundKey: key, dicePolicyForKeyVersion: policy } =
         key_and_policy;
     expect!(key.is_some(), "should have received a key");
@@ -432,25 +435,25 @@ fn derived_clear_key() {
         keyPolicy: clear_key_policy,
         context: "context".as_bytes().to_vec(),
     };
-    let key = hw_device_key.deriveKey(&params);
+    let key = hw_device_key.derive_key(&params);
     expect!(key.is_err(), "shouldn't be able to create a key of length 0");
 
     let clear_key_policy = DerivedKeyPolicy::ClearKeyPolicy(ClearKeyPolicy { keySizeBytes: 32 });
     params.keyPolicy = clear_key_policy;
-    let derived_key = assert_ok!(hw_device_key.deriveKey(&params));
+    let derived_key = assert_ok!(hw_device_key.derive_key(&params));
     let key1 = match derived_key {
         DerivedKey::ExplicitKey(key) => key,
         DerivedKey::Opaque(_) => panic!("wrong type of key received"),
     };
 
     let key_and_policy =
-        assert_ok!(hw_device_key.deriveDicePolicyBoundKey(&derivation_key, &policy));
+        assert_ok!(hw_device_key.derive_dice_policy_bound_key(&derivation_key, &policy));
     let DiceBoundKeyResult { diceBoundKey: key, dicePolicyWasCurrent: current_policy } =
         key_and_policy;
     expect!(key.is_some(), "should have received a key");
     expect!(current_policy, "policy should have been current");
     params.derivationKey = key;
-    let derived_key = assert_ok!(hw_device_key.deriveKey(&params));
+    let derived_key = assert_ok!(hw_device_key.derive_key(&params));
     let key2 = match derived_key {
         DerivedKey::ExplicitKey(key) => key,
         DerivedKey::Opaque(_) => panic!("wrong type of key received"),
@@ -458,7 +461,7 @@ fn derived_clear_key() {
     expect!(openssl::memcmp::eq(&key1, &key2), "keys should have matched");
 
     params.context = "cont3xt".as_bytes().to_vec();
-    let derived_key = assert_ok!(hw_device_key.deriveKey(&params));
+    let derived_key = assert_ok!(hw_device_key.derive_key(&params));
     let key3 = match derived_key {
         DerivedKey::ExplicitKey(key) => key,
         DerivedKey::Opaque(_) => panic!("wrong type of key received"),
@@ -480,8 +483,10 @@ fn derive_keys_happy_path() {
     };
     let derivation_context = b"context";
     let key_size = HMAC_SHA256_KEY_LEN;
-    let key =
-        assert_ok!(hw_crypto_key.importClearKey(&clear_key, &policy), "couldn't import clear key");
+    let key = assert_ok!(
+        hw_crypto_key.import_clear_key(&clear_key, &policy),
+        "couldn't import clear key"
+    );
     // Deriving a clear key
     let derived_policy =
         DerivedKeyPolicy::ClearKeyPolicy(ClearKeyPolicy { keySizeBytes: key_size as i32 });
@@ -490,7 +495,7 @@ fn derive_keys_happy_path() {
         keyPolicy: derived_policy,
         context: derivation_context.to_vec(),
     };
-    let derived_key_result = hw_crypto_key.deriveKey(&params);
+    let derived_key_result = hw_crypto_key.derive_key(&params);
     expect!(derived_key_result.is_ok(), "should be able to derive a clear key");
 
     // deriving an opaque key
@@ -498,7 +503,7 @@ fn derive_keys_happy_path() {
         assert_ok!(cbor_serialize_key_policy(&policy), "couldn't crete a serialized policy");
     let derived_policy = DerivedKeyPolicy::OpaqueKey(derived_key_policy);
     params.keyPolicy = derived_policy;
-    let derived_key_result = hw_crypto_key.deriveKey(&params);
+    let derived_key_result = hw_crypto_key.derive_key(&params);
     expect!(derived_key_result.is_ok(), "should be able to derive an opaque key");
 }
 
@@ -516,8 +521,10 @@ fn try_derive_key_wrong_key_purpose() {
     };
     let derivation_context = b"context";
     let key_size = HMAC_SHA256_KEY_LEN;
-    let key =
-        assert_ok!(hw_crypto_key.importClearKey(&clear_key, &policy), "couldn't import clear key");
+    let key = assert_ok!(
+        hw_crypto_key.import_clear_key(&clear_key, &policy),
+        "couldn't import clear key"
+    );
     // Deriving a clear key
     let derived_policy =
         DerivedKeyPolicy::ClearKeyPolicy(ClearKeyPolicy { keySizeBytes: key_size as i32 });
@@ -526,7 +533,7 @@ fn try_derive_key_wrong_key_purpose() {
         keyPolicy: derived_policy,
         context: derivation_context.to_vec(),
     };
-    let derived_key_result = hw_crypto_key.deriveKey(&params);
+    let derived_key_result = hw_crypto_key.derive_key(&params);
     expect!(derived_key_result.is_err(), "should not be able to derive a key with a signing key");
 
     // deriving an opaque key
@@ -534,7 +541,7 @@ fn try_derive_key_wrong_key_purpose() {
         assert_ok!(cbor_serialize_key_policy(&policy), "couldn't crete a serialized policy");
     let derived_policy = DerivedKeyPolicy::OpaqueKey(derived_key_policy);
     params.keyPolicy = derived_policy;
-    let derived_key_result = hw_crypto_key.deriveKey(&params);
+    let derived_key_result = hw_crypto_key.derive_key(&params);
     expect!(derived_key_result.is_err(), "should not be able to derive a key with a signing key");
 }
 
@@ -553,8 +560,10 @@ fn valid_clear_key_derivation() {
     };
     let derivation_context = b"context";
     let key_size = 5u64;
-    let key =
-        assert_ok!(hw_crypto_key.importClearKey(&clear_key, &policy), "couldn't import clear key");
+    let key = assert_ok!(
+        hw_crypto_key.import_clear_key(&clear_key, &policy),
+        "couldn't import clear key"
+    );
     let derived_policy =
         DerivedKeyPolicy::ClearKeyPolicy(ClearKeyPolicy { keySizeBytes: key_size as i32 });
     let params = DerivedKeyParameters {
@@ -562,7 +571,7 @@ fn valid_clear_key_derivation() {
         keyPolicy: derived_policy,
         context: derivation_context.to_vec(),
     };
-    let derived_key = assert_ok!(hw_crypto_key.deriveKey(&params));
+    let derived_key = assert_ok!(hw_crypto_key.derive_key(&params));
     let DerivedKey::ExplicitKey(derived_key) = derived_key else {
         panic!("shouldn't have recovered an opaque key");
     };
@@ -592,8 +601,10 @@ fn valid_opaque_key_derivation() {
         keyType: KeyType::HMAC_SHA256,
     };
     let derivation_context = b"context";
-    let key =
-        assert_ok!(hw_crypto_key.importClearKey(&clear_key, &policy), "couldn't import clear key");
+    let key = assert_ok!(
+        hw_crypto_key.import_clear_key(&clear_key, &policy),
+        "couldn't import clear key"
+    );
     // We will use the same key policy for the opaque derived key
     let derived_key_policy =
         assert_ok!(cbor_serialize_key_policy(&policy), "couldn't crete a serialized policy");
@@ -603,7 +614,7 @@ fn valid_opaque_key_derivation() {
         keyPolicy: derived_policy,
         context: derivation_context.to_vec(),
     };
-    let derived_key = assert_ok!(hw_crypto_key.deriveKey(&params));
+    let derived_key = assert_ok!(hw_crypto_key.derive_key(&params));
     let derived_opaque_key = if let DerivedKey::Opaque(derived_opaque_key) = derived_key {
         derived_opaque_key
     } else {
@@ -629,18 +640,18 @@ fn valid_opaque_key_derivation() {
         keyPolicy: clear_key_policy,
         context: derivation_context.to_vec(),
     };
-    let derived_clear_key = assert_ok!(hw_crypto_key.deriveKey(&params));
+    let derived_clear_key = assert_ok!(hw_crypto_key.derive_key(&params));
     let DerivedKey::ExplicitKey(derived_clear_key1) = derived_clear_key else {
         panic!("shouldn't have recovered an opaque key");
     };
     let derived_key_local =
         ExplicitKeyMaterial::Hmac(HmacKey::Sha256(derived_key_local.try_into().unwrap()));
     let imported_derived_key = assert_ok!(
-        hw_crypto_key.importClearKey(&derived_key_local, &policy),
+        hw_crypto_key.import_clear_key(&derived_key_local, &policy),
         "couldn't import local key"
     );
     params.derivationKey = Some(imported_derived_key);
-    let derived_clear_key = assert_ok!(hw_crypto_key.deriveKey(&params));
+    let derived_clear_key = assert_ok!(hw_crypto_key.derive_key(&params));
     let derived_clear_key2 = if let DerivedKey::ExplicitKey(derived_clear_key) = derived_clear_key {
         derived_clear_key
     } else {
@@ -660,10 +671,14 @@ fn invalid_key_functions() {
         keyManagementKey: false,
         keyType: KeyType::HMAC_SHA256,
     };
-    let key =
-        assert_ok!(hw_crypto_key.importClearKey(&clear_key, &policy), "couldn't import clear key");
-    let key2 =
-        assert_ok!(hw_crypto_key.importClearKey(&clear_key, &policy), "couldn't import clear key");
+    let key = assert_ok!(
+        hw_crypto_key.import_clear_key(&clear_key, &policy),
+        "couldn't import clear key"
+    );
+    let key2 = assert_ok!(
+        hw_crypto_key.import_clear_key(&clear_key, &policy),
+        "couldn't import clear key"
+    );
     let export_err = assert_ok!(key
         .exportWrappedKey(&key2)
         .err()
@@ -694,8 +709,10 @@ fn set_protection_id() {
         keyManagementKey: false,
         keyType: KeyType::HMAC_SHA256,
     };
-    let key =
-        assert_ok!(hw_crypto_key.importClearKey(&clear_key, &policy), "couldn't import clear key");
+    let key = assert_ok!(
+        hw_crypto_key.import_clear_key(&clear_key, &policy),
+        "couldn't import clear key"
+    );
     let result = key.setProtectionId(ProtectionId::WIDEVINE_OUTPUT_BUFFER, &Vec::new());
     expect!(result.is_err(), "should not be able to call protection ID without desired protection");
     let read_protection = vec![OperationType::READ];
@@ -711,14 +728,16 @@ fn set_protection_id() {
     expect!(result.is_err(), "should not be able to set protection id after it was set");
 
     // Verifying that we cannot call setProtectionId on keys we have imported
-    let key =
-        assert_ok!(hw_crypto_key.importClearKey(&clear_key, &policy), "couldn't import clear key");
+    let key = assert_ok!(
+        hw_crypto_key.import_clear_key(&clear_key, &policy),
+        "couldn't import clear key"
+    );
     let client_policy =
-        assert_ok!(hw_crypto_key.getCurrentDicePolicy(), "Couldn't get dice policy back");
+        assert_ok!(hw_crypto_key.current_dice_policy(), "Couldn't get dice policy back");
     let token =
         assert_ok!(key.getShareableToken(client_policy.as_slice()), "Couldn't get shareable token");
     let imported_key = assert_ok!(
-        hw_crypto_key.keyTokenImport(&token, client_policy.as_slice()),
+        hw_crypto_key.key_token_import(&token, client_policy.as_slice()),
         "Couldn't import shareable token"
     );
     let result =
@@ -738,14 +757,16 @@ fn derive_dice_bound_from_opaque_key() {
         keyManagementKey: false,
         keyType: KeyType::HMAC_SHA256,
     };
-    let key =
-        assert_ok!(hw_crypto_key.importClearKey(&clear_key, &policy), "couldn't import clear key");
+    let key = assert_ok!(
+        hw_crypto_key.import_clear_key(&clear_key, &policy),
+        "couldn't import clear key"
+    );
 
     let dice_derivation_key = DiceBoundDerivationKey::OpaqueKey(Some(key));
 
     // Generate the current derivation key and policy
     let key_and_policy =
-        assert_ok!(hw_crypto_key.deriveCurrentDicePolicyBoundKey(&dice_derivation_key));
+        assert_ok!(hw_crypto_key.derive_current_dice_policy_bound_key(&dice_derivation_key));
     let DiceCurrentBoundKeyResult {
         diceBoundKey: dice_bound_derivation_key,
         dicePolicyForKeyVersion: dice_policy,
@@ -776,7 +797,7 @@ fn derive_dice_bound_from_opaque_key() {
         keyPolicy: derived_policy,
         context: derivation_context.to_vec(),
     };
-    let derived_key_result = hw_crypto_key.deriveKey(&params);
+    let derived_key_result = hw_crypto_key.derive_key(&params);
     expect!(derived_key_result.is_ok(), "should be able to derive a clear key");
 }
 
@@ -792,13 +813,15 @@ fn try_derive_dice_bound_from_opaque_key_wrong_type() {
         keyManagementKey: false,
         keyType: KeyType::HMAC_SHA256,
     };
-    let key =
-        assert_ok!(hw_crypto_key.importClearKey(&clear_key, &policy), "couldn't import clear key");
+    let key = assert_ok!(
+        hw_crypto_key.import_clear_key(&clear_key, &policy),
+        "couldn't import clear key"
+    );
 
     let dice_derivation_key = DiceBoundDerivationKey::OpaqueKey(Some(key));
 
     // Generate the current derivation key and policy
-    let result = hw_crypto_key.deriveCurrentDicePolicyBoundKey(&dice_derivation_key);
+    let result = hw_crypto_key.derive_current_dice_policy_bound_key(&dice_derivation_key);
 
     expect!(result.is_err(), "wrong type of key provided for derivation");
 }

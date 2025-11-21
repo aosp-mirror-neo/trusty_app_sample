@@ -35,7 +35,7 @@ fn parse_cmd_list_single_item() {
     // getting hwcrypto interface
     let hw_crypto_key = assert_ok!(get_hwcryptokey(), "couldn't retrieve hw crypto binder");
     let hw_crypto_operations = assert_ok!(
-        hw_crypto_key.getHwCryptoOperations(),
+        hw_crypto_key.get_hwcrypto_operations(),
         "Couldn't get back a hwcryptokey operations binder object"
     );
 
@@ -57,7 +57,7 @@ fn parse_empty_cmd_list() {
     // getting hwcrypto interface
     let hw_crypto_key = assert_ok!(get_hwcryptokey(), "couldn't retrieve hw crypto binder");
     let hw_crypto_operations = assert_ok!(
-        hw_crypto_key.getHwCryptoOperations(),
+        hw_crypto_key.get_hwcrypto_operations(),
         "Couldn't get back a hwcryptokey operations binder object"
     );
 
@@ -81,7 +81,7 @@ fn simple_copy_operation_on_initial_state() {
     // getting hwcrypto interface
     let hw_crypto_key = assert_ok!(get_hwcryptokey(), "couldn't retrieve hw crypto binder");
     let hw_crypto_operations = assert_ok!(
-        hw_crypto_key.getHwCryptoOperations(),
+        hw_crypto_key.get_hwcrypto_operations(),
         "Couldn't get back a hwcryptokey operations binder object"
     );
 
@@ -125,7 +125,7 @@ fn invalid_operations_initial_state() {
     // getting hwcrypto interface
     let hw_crypto_key = assert_ok!(get_hwcryptokey(), "couldn't retrieve hw crypto binder");
     let hw_crypto_operations = assert_ok!(
-        hw_crypto_key.getHwCryptoOperations(),
+        hw_crypto_key.get_hwcrypto_operations(),
         "Couldn't get back a hwcryptokey operations binder object"
     );
 
@@ -179,7 +179,7 @@ fn invalid_operations_destroyed_state() {
     // getting hwcrypto interface
     let hw_key = assert_ok!(get_hwcryptokey(), "couldn't retrieve hw crypto binder");
     let hw_crypto_operations = assert_ok!(
-        hw_key.getHwCryptoOperations(),
+        hw_key.get_hwcrypto_operations(),
         "Couldn't get back a hwcryptokey operations binder object"
     );
 
@@ -248,7 +248,8 @@ fn invalid_operations_destroyed_state() {
     };
     let hmac_key_material: ExplicitKeyMaterial =
         ExplicitKeyMaterial::Hmac(HmacKey::Sha256([0; 32]));
-    let key = assert_ok!(hw_key.importClearKey(&hmac_key_material, &policy), "couldn't import key");
+    let key =
+        assert_ok!(hw_key.import_clear_key(&hmac_key_material, &policy), "couldn't import key");
     let hmac_parameters = HmacOperationParameters { key: Some(key.clone()) };
     let op_parameters = OperationParameters::Hmac(hmac_parameters);
     cmd_list.push(CryptoOperation::SetOperationParameters(op_parameters));

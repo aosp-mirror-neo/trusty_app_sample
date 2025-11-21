@@ -42,9 +42,9 @@ fn hmac_simple_test_from_binder() {
     };
     let hmac_key_material: ExplicitKeyMaterial =
         ExplicitKeyMaterial::Hmac(HmacKey::Sha256([0; 32]));
-    let key = hw_key.importClearKey(&hmac_key_material, &policy).expect("couldn't import key");
+    let key = hw_key.import_clear_key(&hmac_key_material, &policy).expect("couldn't import key");
 
-    let hw_crypto = hw_key.getHwCryptoOperations().expect("Failed to get crypto ops.");
+    let hw_crypto = hw_key.get_hwcrypto_operations().expect("Failed to get crypto ops.");
 
     let hmac_parameters = HmacOperationParameters { key: Some(key.clone()) };
     let op_parameters = OperationParameters::Hmac(hmac_parameters);
@@ -92,7 +92,7 @@ fn hmac_simple_test_from_binder() {
 #[test]
 fn import_clear_hmac_key() {
     let hw_key = assert_ok!(get_hwcryptokey(), "couldn't retrieve hw crypto binder");
-    let hw_crypto = hw_key.getHwCryptoOperations().expect("couldn't get key crypto ops.");
+    let hw_crypto = hw_key.get_hwcrypto_operations().expect("couldn't get key crypto ops.");
     let usage = KeyUse::SIGN;
     let key_type = KeyType::HMAC_SHA256;
     let policy = KeyPolicy {
@@ -106,7 +106,7 @@ fn import_clear_hmac_key() {
         10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10,
         10, 10, 10, 10, 10, 10, 10, 10, 10,
     ]));
-    let key = hw_key.importClearKey(&aes_key_material, &policy).expect("couldn't import key");
+    let key = hw_key.import_clear_key(&aes_key_material, &policy).expect("couldn't import key");
     let hmac_parameters = HmacOperationParameters { key: Some(key) };
     let op_parameters = OperationParameters::Hmac(hmac_parameters);
     let mut cmd_list = Vec::<CryptoOperation>::new();
@@ -147,14 +147,16 @@ fn hwcrypto_token_export_import_hmac_use() {
         keyManagementKey: false,
         keyType: KeyType::HMAC_SHA256,
     };
-    let key =
-        assert_ok!(hw_crypto_key.importClearKey(&clear_key, &policy), "couldn't import clear key");
+    let key = assert_ok!(
+        hw_crypto_key.import_clear_key(&clear_key, &policy),
+        "couldn't import clear key"
+    );
     let client_policy =
-        assert_ok!(hw_crypto_key.getCurrentDicePolicy(), "Couldn't get dice policy back");
+        assert_ok!(hw_crypto_key.current_dice_policy(), "Couldn't get dice policy back");
     let token =
         assert_ok!(key.getShareableToken(client_policy.as_slice()), "Couldn't get shareable token");
     let imported_key = assert_ok!(
-        hw_crypto_key.keyTokenImport(&token, client_policy.as_slice()),
+        hw_crypto_key.key_token_import(&token, client_policy.as_slice()),
         "Couldn't import shareable token"
     );
 
@@ -162,7 +164,7 @@ fn hwcrypto_token_export_import_hmac_use() {
     assert!(policy.is_ok(), "Couldn't get token key policy");
 
     let hw_crypto_operations = assert_ok!(
-        hw_crypto_key.getHwCryptoOperations(),
+        hw_crypto_key.get_hwcrypto_operations(),
         "Couldn't get back a hwcryptokey operations binder object"
     );
 
@@ -235,11 +237,13 @@ fn rfc4868_test_case_auth(hmac_key: HmacTestKey, data: Vec<u8>, expected_result:
         keyManagementKey: false,
         keyType: key_type,
     };
-    let key =
-        assert_ok!(hw_crypto_key.importClearKey(&clear_key, &policy), "couldn't import clear key");
+    let key = assert_ok!(
+        hw_crypto_key.import_clear_key(&clear_key, &policy),
+        "couldn't import clear key"
+    );
 
     let hw_crypto_operations = assert_ok!(
-        hw_crypto_key.getHwCryptoOperations(),
+        hw_crypto_key.get_hwcrypto_operations(),
         "Couldn't get back a hwcryptokey operations binder object"
     );
     let hmac_parameters = HmacOperationParameters { key: Some(key) };
