@@ -37,6 +37,8 @@ using std::vector;
 #define TIPC_QUEUE_LEN 3
 #define BUFFER_SIZE 4096
 
+#define SHARED_BUFFER_SIZE 1024 * 1024
+
 #define CMD_PROCESSOR_PORT \
     "android.trusty.cmdprocessor.ICommandProcessor/default"
 #define MEM_SHARE_PORT "android.trusty.membuf.IMemoryBufferShareVm/default"
@@ -52,12 +54,12 @@ handle_t deserialize_token(const vector<uint8_t>& serialized_token) {
     return handle;
 }
 
-int release_handle(handle_t* handle) {
+int release_handle(handle_t* handle, uint64_t ipa) {
     if (handle == nullptr) {
         TLOGE("Received a null handle pointer\n");
         return ERR_INVALID_ARGS;
     }
-    struct dmaimporter_req req_hdr = {.cmd = RELEASE_IPA};
+    struct dmaimporter_req req_hdr = {.cmd = RELEASE_IPA, .ipa = ipa};
     struct iovec tx_iov = {
             .iov_base = &req_hdr,
             .iov_len = sizeof(req_hdr),
@@ -155,18 +157,21 @@ public:
                         deserialize_token(memBufferRefs[0].token.token);
                 TLOGI("Mapping handle: %x\n", handle);
                 void* mapped_address =
-                        mmap(0, 4096, PROT_READ | PROT_WRITE, 0, handle, 0);
+                        mmap(0, SHARED_BUFFER_SIZE, PROT_READ | PROT_WRITE, 0,
+                             handle, 0);
                 if (mapped_address == MAP_FAILED) {
                     TLOGE("Couldn't map handle %x\n", handle);
                     return Status::fromExceptionCode(Status::EX_ILLEGAL_STATE,
                                                      "Couldn't map address");
+                } else {
+                    TLOGI("Handle %x was mapped\n", handle);
                 }
                 uint8_t* mapped_data = (uint8_t*)mapped_address;
                 for (size_t i = 0; i < num_bytes_print; i++) {
                     TLOGE("Received data[i]= %d\n", *mapped_data);
                     mapped_data++;
                 }
-                int res = munmap(mapped_address, 4096);
+                int res = munmap(mapped_address, SHARED_BUFFER_SIZE);
                 if (res != 0) {
                     TLOGE("munmap %p failed: %d\n", mapped_address, res);
                 }
@@ -182,7 +187,8 @@ public:
                         deserialize_token(memBufferRefs[0].token.token);
                 TLOGI("Mapping handle: %x\n", handle);
                 void* mapped_address =
-                        mmap(0, 4096, PROT_READ | PROT_WRITE, 0, handle, 0);
+                        mmap(0, SHARED_BUFFER_SIZE, PROT_READ | PROT_WRITE, 0,
+                             handle, 0);
                 if (mapped_address == NULL) {
                     TLOGE("Couldn't map handle %x\n", handle);
                     return Status::fromExceptionCode(Status::EX_ILLEGAL_STATE,
@@ -190,7 +196,7 @@ public:
                 }
                 uint8_t* mapped_data = (uint8_t*)mapped_address;
                 *mapped_data += 1;
-                int res = munmap(mapped_address, 4096);
+                int res = munmap(mapped_address, SHARED_BUFFER_SIZE);
                 if (res != 0) {
                     TLOGE("munmap %p failed: %d\n", mapped_address, res);
                 }
@@ -287,12 +293,14 @@ err:
 
 class MemoryBufferContext : public BnMemoryBufferContext {
 public:
-    static android::sp<MemoryBufferContext> Make(handle_t handle) {
-        auto self = android::sp<MemoryBufferContext>::make(handle);
+    static android::sp<MemoryBufferContext> Make(handle_t handle,
+                                                 uint64_t ipa) {
+        auto self = android::sp<MemoryBufferContext>::make(handle, ipa);
         return self;
     }
 
-    MemoryBufferContext(handle_t handle) : handle_(handle), destroyed_(false) {}
+    MemoryBufferContext(handle_t handle, uint64_t ipa)
+            : handle_(handle), destroyed_(false), ipa_(ipa) {}
 
     ~MemoryBufferContext() {
         if (!destroyed_) {
@@ -341,7 +349,7 @@ public:
                     Status::EX_ILLEGAL_STATE,
                     "MemoryBufferToken has already been destroyed");
         }
-        int res = release_handle(&handle_);
+        int res = release_handle(&handle_, ipa_);
         if (res != NO_ERROR) {
             TLOGE("couldn't release handle %x\n", handle_);
             return Status::fromExceptionCode(
@@ -367,6 +375,7 @@ public:
 private:
     handle_t handle_;
     bool destroyed_;
+    uint64_t ipa_;
 };
 
 class MemoryBufferShare : public BnMemoryBufferShareVm {
@@ -399,7 +408,7 @@ public:
                     "Couldn't get memory handle from ipa");
         }
         android::sp<MemoryBufferContext> mem_buffer_ctx =
-                MemoryBufferContext::Make(handle);
+                MemoryBufferContext::Make(handle, ipa);
         aidl_return->context = mem_buffer_ctx;
         return Status::ok();
     }
