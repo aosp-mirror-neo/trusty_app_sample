@@ -26,7 +26,7 @@ MODULE_LIBRARY_DEPS += \
 	frameworks/native/libs/binder/trusty \
 	trusty/user/app/sample/cmd_processor_test/aidl/cmd_processor/cpp \
 	trusty/user/app/sample/cmd_processor_test/aidl/mem_buf/cpp \
-	trusty/user/base/interface/dmaimporter \
+	trusty/user/base/experimental/interface/dmaimporter \
 	trusty/user/base/lib/libc-trusty \
 	trusty/user/base/lib/libstdc++-trusty \
 	trusty/user/base/lib/tipc \
