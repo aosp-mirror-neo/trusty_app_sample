@@ -1,0 +1,6 @@
+{
+    "app_name": "cmd_processor_test_c_app",
+    "uuid": "ce1d2742-2814-462e-b4a0-5d790c298ef0",
+    "min_heap": 458752,
+    "min_stack": 32768
+}
