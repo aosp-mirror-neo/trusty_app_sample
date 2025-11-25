@@ -16,7 +16,7 @@
 
 [
     # userspace tests that don't use storage
-    porttest("com.android.appmgmt-unittest.appmngr"),
+    porttest("com.android.appmgmt-unittest.appmngr").needs(storage_boot=True),
     porttest("com.android.manifesttest"),
     porttest("com.android.memref.test"),
     porttest("com.android.trusty.rust.memref.test"),
