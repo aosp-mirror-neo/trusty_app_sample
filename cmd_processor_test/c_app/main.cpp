@@ -19,7 +19,7 @@
 #include <binder/ParcelFileDescriptor.h>
 #include <binder/RpcServerTrusty.h>
 
-#include <interface/dmaimporter/dmaimporter.h>
+#include <dmaimporterlib.h>
 
 using android::binder::Status;
 using android::os::ParcelFileDescriptor;
@@ -52,81 +52,6 @@ handle_t deserialize_token(const vector<uint8_t>& serialized_token) {
         handle |= *element;
     }
     return handle;
-}
-
-int release_handle(handle_t* handle, uint64_t ipa) {
-    if (handle == nullptr) {
-        TLOGE("Received a null handle pointer\n");
-        return ERR_INVALID_ARGS;
-    }
-    struct dmaimporter_req req_hdr = {.cmd = RELEASE_IPA, .ipa = ipa};
-    struct iovec tx_iov = {
-            .iov_base = &req_hdr,
-            .iov_len = sizeof(req_hdr),
-    };
-
-    ipc_msg_t tx_msg = {
-            .num_iov = 1,
-            .iov = &tx_iov,
-            .num_handles = 1,
-            .handles = handle,
-    };
-
-    dmaimporter_res response;
-
-    struct iovec rx_iov = {
-            .iov_base = &response,
-            .iov_len = sizeof(dmaimporter_res),
-    };
-    ipc_msg_t rx_msg = {
-            .num_iov = 1,
-            .iov = &rx_iov,
-            .num_handles = 0,
-            .handles = NULL,
-    };
-    TLOGI("Connecting to port %s\n", DMAIMPORTER_PORT);
-    long rc = connect(DMAIMPORTER_PORT, IPC_CONNECT_WAIT_FOR_PORT);
-    if (rc < 0) {
-        TLOGE("error connecting to port %s: %ld\n", DMAIMPORTER_PORT, rc);
-        return rc;
-    }
-    handle_t chan = (handle_t)rc;
-    rc = send_msg(chan, &tx_msg);
-    if (rc < 0) {
-        TLOGE("sending message to dma importer failed %ld\n", rc);
-        goto err;
-    }
-    if (rc != sizeof(req_hdr)) {
-        TLOGE("wrong req_hdr size for dma importer received %ld\n", rc);
-        goto err;
-    }
-    TLOGI("Waiting on channel\n");
-    uevent_t uevt;
-    rc = wait(chan, &uevt, INFINITE_TIME);
-    if (rc != NO_ERROR) {
-        TLOGE("wait for dma importer event failed %ld\n", rc);
-        goto err;
-    }
-    ipc_msg_info_t inf;
-    rc = get_msg(chan, &inf);
-    if (rc != NO_ERROR) {
-        TLOGE("error receiving event data for dma importer %ld\n", rc);
-        goto err;
-    }
-    if (inf.len != sizeof(dmaimporter_res)) {
-        TLOGE("should have received %ld bytes of data, received %ld\n",
-              sizeof(dmaimporter_res), inf.len);
-        goto err;
-    }
-    rc = read_msg(chan, inf.id, 0, &rx_msg);
-    if (rc < 0) {
-        TLOGE("error reading data for dma importer %ld\n", rc);
-    }
-    rc = (int)response.status;
-
-err:
-    close(chan);
-    return rc;
 }
 
 class CommandProcessor : public BnCommandProcessor {
@@ -218,79 +143,6 @@ public:
     }
 };
 
-int get_ext_mem(uint64_t ipa, uint64_t len, handle_t* handle) {
-    if (handle == nullptr) {
-        TLOGE("Received a null handle pointer\n");
-        return ERR_INVALID_ARGS;
-    }
-    handle_t rec_handles[1];
-    struct dmaimporter_req req_hdr = {.cmd = MAP_IPA, .ipa = ipa, .len = len};
-    struct iovec tx_iov = {
-            .iov_base = &req_hdr,
-            .iov_len = sizeof(req_hdr),
-    };
-
-    ipc_msg_t tx_msg = {
-            .num_iov = 1,
-            .iov = &tx_iov,
-    };
-
-    struct iovec rx_iov = {
-            .iov_base = NULL,
-            .iov_len = 0,
-    };
-    ipc_msg_t rx_msg = {
-            .num_iov = 1,
-            .iov = &rx_iov,
-            .num_handles = 1,
-            .handles = rec_handles,
-    };
-    TLOGI("Connecting to port %s\n", DMAIMPORTER_PORT);
-    long rc = connect(DMAIMPORTER_PORT, IPC_CONNECT_WAIT_FOR_PORT);
-    if (rc < 0) {
-        TLOGE("error connecting to port %s: %ld\n", DMAIMPORTER_PORT, rc);
-        return rc;
-    }
-    handle_t chan = (handle_t)rc;
-    rc = send_msg(chan, &tx_msg);
-    if (rc < 0) {
-        TLOGE("sending message to dma importer failed %ld\n", rc);
-        goto err;
-    }
-    if (rc != sizeof(req_hdr)) {
-        TLOGE("wrong req_hdr size for dma importer received %ld\n", rc);
-        goto err;
-    }
-    TLOGI("Waiting on channel\n");
-    uevent_t uevt;
-    rc = wait(chan, &uevt, INFINITE_TIME);
-    if (rc != NO_ERROR) {
-        TLOGE("wait for dma importer event failed %ld\n", rc);
-        goto err;
-    }
-    ipc_msg_info_t inf;
-    rc = get_msg(chan, &inf);
-    if (rc != NO_ERROR) {
-        TLOGE("error receiving event data for dma importer %ld\n", rc);
-        goto err;
-    }
-    if (inf.len != 0) {
-        TLOGE("should not have received data %ld\n", rc);
-        goto err;
-    }
-    rc = read_msg(chan, inf.id, 0, &rx_msg);
-    if (rc < 0) {
-        TLOGE("error reading data for dma importer %ld\n", rc);
-    }
-    if (rec_handles[0] > 0) {
-        *handle = rec_handles[0];
-    }
-
-err:
-    close(chan);
-    return rc;
-}
-
 class MemoryBufferContext : public BnMemoryBufferContext {
 public:
     static android::sp<MemoryBufferContext> Make(handle_t handle,
@@ -349,7 +201,7 @@ public:
                     Status::EX_ILLEGAL_STATE,
                     "MemoryBufferToken has already been destroyed");
         }
-        int res = release_handle(&handle_, ipa_);
+        int res = release_dma_object(&handle_, ipa_);
         if (res != NO_ERROR) {
             TLOGE("couldn't release handle %x\n", handle_);
             return Status::fromExceptionCode(
@@ -400,7 +252,7 @@ public:
                     "Received a null ShareMemoryBufferResult");
         }
         handle_t handle;
-        int rc = get_ext_mem(ipa, sizeBytes, &handle);
+        int rc = create_dma_object(ipa, sizeBytes, &handle);
         if (rc < 0) {
             TLOGE("Couldn't get memory handle from ipa: %d\n", rc);
             return Status::fromExceptionCode(
