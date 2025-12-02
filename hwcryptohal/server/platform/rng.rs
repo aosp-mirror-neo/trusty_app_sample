@@ -17,26 +17,15 @@
 //! Module providing access to platform specific functions used by the library.
 use kmr_common::crypto;
 
-use crate::ffi_bindings;
-
 #[derive(Default)]
 pub struct PlatformRng;
 
 impl crypto::Rng for PlatformRng {
-    fn add_entropy(&mut self, data: &[u8]) {
-        trusty_rng_add_entropy(data);
+    fn add_entropy(&mut self, _data: &[u8]) {
+        // BoringSSL manages its own entropy; manual reseeding is a no-op here.
     }
     fn fill_bytes(&mut self, dest: &mut [u8]) {
         openssl::rand::rand_bytes(dest)
             .expect("shouldn't happen, function never fails on BoringSSL");
-    }
-}
-
-/// Add entropy to Trusty's RNG.
-pub fn trusty_rng_add_entropy(data: &[u8]) {
-    // Safety: `data` is a valid slice
-    let rc = unsafe { ffi_bindings::sys::trusty_rng_add_entropy(data.as_ptr(), data.len()) };
-    if rc != 0 {
-        panic!("trusty_rng_add_entropy() failed, {rc}")
     }
 }
