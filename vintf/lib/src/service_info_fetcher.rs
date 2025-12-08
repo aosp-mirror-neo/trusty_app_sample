@@ -15,7 +15,7 @@
 //! Implementation of IServiceInfoFetcher.aidl
 
 use log::{error, trace};
-use service_manager::get_supported_vintf_services;
+use service_manager::{get_supported_vintf_services, get_vintf_binder};
 use vintf_service_info_aidl::aidl::android::vintf::{
     IServiceInfoFetcher::{BnServiceInfoFetcher, IServiceInfoFetcher},
     ServiceInfo::ServiceInfo,
@@ -44,21 +44,12 @@ impl IServiceInfoFetcher for ServiceInfoFetcher {
     fn listAllServices(&self) -> binder::Result<Vec<String>> {
         trace!("In IServiceInfoFetcher list service...");
         let services = get_supported_vintf_services();
-        Ok(services.into_iter().map(|s| s.name().to_string()).collect())
+        Ok(services.into_iter().map(|s| s.to_string()).collect())
     }
 
     fn getServiceInfo(&self, service_name: &str) -> binder::Result<ServiceInfo> {
         trace!("In IServiceInfoFetcher get service info... {} ", service_name);
-        let service = get_supported_vintf_services()
-            .into_iter()
-            .find(|s| s.name() == service_name)
-            .ok_or_else(|| {
-                binder::Status::new_service_specific_error_str(
-                    -1,
-                    Some("failed to get vintf service"),
-                )
-            })?;
-        let mut service_binder = service.get_binder()?;
+        let mut service_binder = get_vintf_binder(service_name)?;
         let interface = service_binder.get_class().ok_or_else(|| {
             binder::Status::new_service_specific_error_str(-1, Some("failed to get interface"))
         })?;
