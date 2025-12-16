@@ -20,15 +20,17 @@ mod devicestate_vts {
 
     use android_hardware_security_see_devicestate::aidl::android::hardware::security::see::devicestate::IDeviceState::IDeviceState;
     use service_manager::wait_for_interface;
+    use test::assert_ok;
 
     const DEVICE_STATE_SERVICE_NAME: &str =
         "android.hardware.security.see.devicestate.IDeviceState/default";
 
     #[test]
     fn provisioning_allowed_test() {
-        let device_state = wait_for_interface::<dyn IDeviceState>(DEVICE_STATE_SERVICE_NAME)
-            .expect("Failed to get IDeviceState binder");
-        let _is_provisioning_allowed =
-            device_state.provisioningAllowed().expect("Failed to get provisioning allowed status");
+        let device_state = assert_ok!(
+            wait_for_interface::<dyn IDeviceState>(DEVICE_STATE_SERVICE_NAME),
+            "Failed to get IDeviceState binder"
+        );
+        assert_ok!(device_state.provisioningAllowed(), "Failed to get provisioning allowed status");
     }
 }
