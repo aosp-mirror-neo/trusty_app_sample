@@ -73,7 +73,7 @@ impl IServiceInfoFetcher for ServiceInfoFetcher {
             r#type: descriptor,
             instance: name[1].to_string(),
             version,
-            requireVintfDeclaration: true,
+            requireVintfDeclaration: service_binder.requires_vintf_declaration(),
             hash,
             exe: "".to_string(),
             extensions: vec![],
