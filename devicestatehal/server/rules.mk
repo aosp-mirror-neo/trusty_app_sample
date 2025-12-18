@@ -33,6 +33,7 @@ MODULE_LIBRARY_DEPS += \
     trusty/user/base/lib/service_manager/client \
     trusty/user/base/lib/system_state/rust \
     trusty/user/base/lib/tipc/rust \
+    trusty/user/base/lib/trusted_hal_stability_ext/rust \
 
 MODULE_RUST_TESTS := true
 

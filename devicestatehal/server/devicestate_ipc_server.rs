@@ -17,6 +17,10 @@
 //! AIDL IPC Server code
 
 use crate::devicestate::DeviceState;
+
+use android_hardware_security_see_devicestate::aidl::android::hardware::security::see::devicestate::IDeviceState::{
+    BnDeviceState, IDeviceState,
+};
 use authmgr_be_lib::{default_handover_port_config, HandoverService};
 use binder::SpIBinder;
 use rpcbinder::RpcServer;
@@ -31,7 +35,12 @@ const DEVICESTATE_SERVICE_NAME: &str =
     "android.hardware.security.see.devicestate.IDeviceState/default";
 
 fn create_device_state_service(_client_id: ClientIdentifier) -> Option<SpIBinder> {
-    Some(DeviceState::new_binder().as_binder())
+    let device_state_binder = DeviceState::new_binder();
+    trusted_hal_stability_ext::add_trusted_hal_extension::<dyn IDeviceState, BnDeviceState>(
+        &device_state_binder,
+    )
+    .ok()?;
+    Some(device_state_binder.as_binder())
 }
 
 fn devicestatehal_port_cfg() -> Result<PortCfg, TipcError> {
