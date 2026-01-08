@@ -19,6 +19,7 @@ use service_manager::{get_supported_vintf_services, get_vintf_binder};
 use vintf_service_info_aidl::aidl::android::vintf::{
     IServiceInfoFetcher::{BnServiceInfoFetcher, IServiceInfoFetcher},
     ServiceInfo::ServiceInfo,
+    StabilityLevel::StabilityLevel,
 };
 use vintf_service_info_aidl::binder::{
     self,
@@ -73,12 +74,35 @@ impl IServiceInfoFetcher for ServiceInfoFetcher {
             r#type: descriptor,
             instance: name[1].to_string(),
             version,
-            requireVintfDeclaration: true,
+            requireVintfDeclaration: service_binder.requires_vintf_declaration(),
             hash,
             exe: "".to_string(),
             extensions: vec![],
+            binderLibDefaultStability: get_binder_lib_stability_level(&mut service_binder),
         };
         Ok(service_info)
+    }
+}
+
+fn get_binder_lib_stability_level(b: &mut SpIBinder) -> StabilityLevel {
+    let ext = b.get_extension().unwrap_or_else(|e| {
+        error!("failed to get extension: {e:?}");
+        None
+    });
+
+    match ext {
+        None => StabilityLevel::UNKNOWN,
+        Some(ext) => {
+            if ext.is_vendor_stable() {
+                StabilityLevel::VENDOR
+            } else if ext.is_system_stable() {
+                StabilityLevel::SYSTEM
+            } else if ext.requires_vintf_declaration() {
+                StabilityLevel::VINTF
+            } else {
+                StabilityLevel::UNKNOWN
+            }
+        }
     }
 }
 

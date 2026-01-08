@@ -26,6 +26,7 @@ MODULE_AIDL_PACKAGE := android/vintf
 
 MODULE_AIDLS := \
 	$(VINTF_TA_AIDL_DIR)/$(MODULE_AIDL_PACKAGE)/ServiceInfo.aidl \
+	$(VINTF_TA_AIDL_DIR)/$(MODULE_AIDL_PACKAGE)/StabilityLevel.aidl \
 	$(VINTF_TA_AIDL_DIR)/$(MODULE_AIDL_PACKAGE)/IServiceInfoFetcher.aidl \
 
 include make/aidl.mk
