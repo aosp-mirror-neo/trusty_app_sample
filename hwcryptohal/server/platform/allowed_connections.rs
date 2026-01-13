@@ -39,6 +39,11 @@ const KEYMINT_CLIENT_ID: [u8; 16] = [
     0xCE, 0x2A, 0x90, 0x5F, 0x5C, 0x5E, 0xD8, 0x4C, 0xAE, 0x54, 0x87, 0xB8, 0x8C, 0x22, 0xDD, 0xAF,
 ];
 
+/// Gatekeeper UUID: "d9039cf4-a54c-405d-a316-4aedfe325231"
+const GATEKEEPER_CLIENT_ID: [u8; 16] = [
+    0xF4, 0x9C, 0x03, 0xD9, 0x4C, 0xA5, 0x5D, 0x40, 0xA3, 0x16, 0x4A, 0xED, 0xFE, 0x32, 0x52, 0x31,
+];
+
 // Test VM Instance ID parameters
 //    "vm_partition": "system",
 //    "is_vm_persistent": true,
@@ -65,8 +70,9 @@ fn production_allowed_connections(
     match key_slot {
         KeySlot::KEYMINT_SHARED_HMAC_KEY => {
             let mut client_ids = Vec::new();
-            client_ids.try_reserve(1)?;
+            client_ids.try_reserve(2)?;
             client_ids.push(KEYMINT_CLIENT_ID);
+            client_ids.push(GATEKEEPER_CLIENT_ID);
             let mut allowed_connections = Vec::new();
             allowed_connections.try_reserve(1)?;
             allowed_connections.push(AllowedVmClients {

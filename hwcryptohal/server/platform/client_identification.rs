@@ -23,7 +23,7 @@ use ciborium::Value;
 use coset::{AsCborValue, CborSerializable, CoseError};
 use hwcryptohal_common::{cose_enum_gen, err::HwCryptoError, hwcrypto_err};
 use hwcryptohalinterfaces::{ClientIdentification, ClientPolicyCheck, DeviceKeys};
-use log::error;
+use log::{error, info};
 use tipc::{ClientIdentifier, Uuid};
 
 use crate::allowed_connections;
@@ -366,29 +366,43 @@ impl TrustyClientIdentification for TrustyDiceIdentification {
             error!("Couldn't get client metadata: {e:?}, sequence number: {seq_num}");
             hwcrypto_err!(GENERIC_ERROR, "couldn't get client metadata {:?}", e)
         })?;
-        let mut match_found = false;
-        for allowed_connection in allowed_connections::get_allowed_connections(key_slot)? {
-            if client_metadata.instanceIdentifier == allowed_connection.instance_id {
-                // We found the VM in our list of allowed clients
-                match allowed_connection.client_ids {
-                    Some(client_ids) => {
-                        for ta_id in client_ids {
-                            if client_metadata.clientIdentifier == ta_id {
-                                // found a corresponding Instance ID, TA UUID
-                                match_found = true;
-                                break;
-                            }
-                        }
-                    }
-                    // If we don't get a list of client IDs, all TAs inside the VM are allowed
-                    None => match_found = true,
-                }
-                // We have finished checking all clients on this VM. We only expect a single entry
-                // for each VM, so we will exit the external for loop here
-                break;
-            }
+
+        let connections = allowed_connections::get_allowed_connections(key_slot)?;
+        let Some(allowed_connection) =
+            connections.iter().find(|c| client_metadata.instanceIdentifier == c.instance_id)
+        else {
+            info!(
+                "Access Denied: VM instance '{:?}' is not authorized for key slot {key_slot:?}.",
+                client_metadata.instanceIdentifier
+            );
+            return Ok(false);
+        };
+
+        let Some(ref allowed_ids) = allowed_connection.client_ids else {
+            info!(
+                "Access Granted: Wildcard policy active for VM '{:?}' on key slot {key_slot:?}.",
+                client_metadata.instanceIdentifier
+            );
+            return Ok(true);
+        };
+
+        let client_id_str = core::str::from_utf8(&client_metadata.clientIdentifier)
+            .map_err(|e| hwcrypto_err!(GENERIC_ERROR, "Invalid UTF-8 in client ID: {e:?}"))?;
+        let client_uuid = Uuid::new_from_string(client_id_str)
+            .map_err(|e| hwcrypto_err!(GENERIC_ERROR, "Malformed client UUID string: {e:?}"))?;
+        if allowed_ids.iter().any(|id| client_uuid == Uuid::from_bytes(id)) {
+            info!(
+                "Access Granted: TA '{}' in VM '{:?}' authorized for key slot {:?}.",
+                client_uuid, client_metadata.instanceIdentifier, key_slot
+            );
+            Ok(true)
+        } else {
+            info!(
+                "Access Denied: TA '{}' is not in the allowlist for VM '{:?}'.",
+                client_uuid, client_metadata.instanceIdentifier
+            );
+            Ok(false)
         }
-        Ok(match_found)
     }
 
     fn get_policy_tag(&self) -> ClientPolicyCoseLabels {
