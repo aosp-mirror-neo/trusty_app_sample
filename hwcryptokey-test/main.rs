@@ -21,14 +21,12 @@ mod hwcryptokey_vts;
 mod tests {
     test::init!();
 
-    use android_hardware_security_see_hwcrypto::aidl::android::hardware::security::see::hwcrypto::IHwCryptoKey::IHwCryptoKey;
-    use binder::{StatusCode, Strong};
+    use hwcrypto_thal::{HwCryptoKey, Result};
     use service_manager::wait_for_interface;
-
     const RUST_HWCRYPTO_SERVICE: &str =
         "android.hardware.security.see.hwcrypto.IHwCryptoKey/default";
 
-    pub(crate) fn get_hwcryptokey() -> Result<Strong<dyn IHwCryptoKey>, StatusCode> {
-        wait_for_interface(RUST_HWCRYPTO_SERVICE)
+    pub(crate) fn get_hwcryptokey() -> Result<HwCryptoKey> {
+        Ok(HwCryptoKey::new(wait_for_interface(RUST_HWCRYPTO_SERVICE)?))
     }
 }

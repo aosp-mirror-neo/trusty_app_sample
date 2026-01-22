@@ -192,7 +192,7 @@ fn get_key_type(key_length: &u16, mode: &MODE) -> Option<KeyType> {
 
 fn run_aes_vectors(vectors: Vec<Vector>) {
     let hw_crypto = assert_ok!(get_hwcryptokey(), "couldn't retrieve hw crypto binder");
-    let hw_crypto_ops = hw_crypto.getHwCryptoOperations().expect("couldn't get key crypto ops.");
+    let hw_crypto_ops = hw_crypto.get_hwcrypto_operations().expect("couldn't get key crypto ops.");
 
     let mut current_key: Vec<u8> = Vec::new();
     let mut current_iv: Vec<u8> = Vec::new();
@@ -242,7 +242,7 @@ fn run_aes_vectors(vectors: Vec<Vector>) {
         };
 
         let key = hw_crypto
-            .importClearKey(&aes_key_material, &policy)
+            .import_clear_key(&aes_key_material, &policy)
             .expect("Couldn't import clear key");
 
         let parameters = match v.mode.clone().unwrap() {
