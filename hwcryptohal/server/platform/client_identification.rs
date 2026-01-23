@@ -386,20 +386,16 @@ impl TrustyClientIdentification for TrustyDiceIdentification {
             return Ok(true);
         };
 
-        let client_id_str = core::str::from_utf8(&client_metadata.clientIdentifier)
-            .map_err(|e| hwcrypto_err!(GENERIC_ERROR, "Invalid UTF-8 in client ID: {e:?}"))?;
-        let client_uuid = Uuid::new_from_string(client_id_str)
-            .map_err(|e| hwcrypto_err!(GENERIC_ERROR, "Malformed client UUID string: {e:?}"))?;
-        if allowed_ids.iter().any(|id| client_uuid == Uuid::from_bytes(id)) {
+        if allowed_ids.iter().any(|id| client_metadata.clientIdentifier == id) {
             info!(
-                "Access Granted: TA '{}' in VM '{:?}' authorized for key slot {:?}.",
-                client_uuid, client_metadata.instanceIdentifier, key_slot
+                "Access Granted: TA '{:02x?}' in VM '{:?}' authorized for key slot {:?}.",
+                client_metadata.clientIdentifier, client_metadata.instanceIdentifier, key_slot
             );
             Ok(true)
         } else {
             info!(
-                "Access Denied: TA '{}' is not in the allowlist for VM '{:?}'.",
-                client_uuid, client_metadata.instanceIdentifier
+                "Access Denied: TA '{:02x?}' is not in the allowlist for VM '{:?}'.",
+                client_metadata.clientIdentifier, client_metadata.instanceIdentifier
             );
             Ok(false)
         }
