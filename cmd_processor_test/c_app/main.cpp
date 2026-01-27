@@ -157,10 +157,12 @@ public:
     ~MemoryBufferContext() {
         if (!destroyed_) {
             TLOGE("MemoryBufferContext object destroyed before calling release\n");
-            // We are not calling the kernel service here for release to keep
-            // the destructor simple but that could lead to a case on which we
-            // are leaking resources.
-            close(handle_);
+            int res = release_dma_object(&handle_, ipa_);
+            if (res != NO_ERROR) {
+                TLOGE("couldn't release handle %x with ipa: 0x%lx\n", handle_,
+                      ipa_);
+            }
+            handle_ = -1;
             destroyed_ = true;
         }
     }
@@ -201,6 +203,7 @@ public:
                     Status::EX_ILLEGAL_STATE,
                     "MemoryBufferToken has already been destroyed");
         }
+        destroyed_ = true;
         int res = release_dma_object(&handle_, ipa_);
         if (res != NO_ERROR) {
             TLOGE("couldn't release handle %x\n", handle_);
@@ -208,13 +211,7 @@ public:
                     Status::EX_ILLEGAL_STATE,
                     "Couldn't release MemoryBufferToken handle");
         } else {
-            TLOGI("Released handle %x\n", handle_);
-            destroyed_ = true;
-            res = close(handle_);
-            if (res < 0) {
-                TLOGE("close handle failed: %d\n", res);
-            }
-            // TODO: is this a good value for a handle that is no longer valid?
+            TLOGI("Released handle %x with ipa: 0x%lx\n", handle_, ipa_);
             handle_ = -1;
         }
         if (aidl_return != nullptr) {
