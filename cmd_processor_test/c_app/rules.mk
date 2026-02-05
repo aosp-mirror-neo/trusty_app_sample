@@ -27,6 +27,7 @@ MODULE_LIBRARY_DEPS += \
 	trusty/user/app/sample/cmd_processor_test/aidl/cmd_processor/cpp \
 	trusty/user/app/sample/cmd_processor_test/aidl/mem_buf/cpp \
 	trusty/user/base/experimental/lib/dmaimporter \
+	trusty/user/base/experimental/lib/membuffshare \
 	trusty/user/base/lib/libc-trusty \
 	trusty/user/base/lib/libstdc++-trusty \
 	trusty/user/base/lib/tipc \
