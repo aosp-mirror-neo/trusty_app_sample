@@ -14,24 +14,17 @@
 #include <vector>
 
 #include <android/trusty/cmdprocessor/BnCommandProcessor.h>
-#include <android/trusty/membuf/BnMemoryBufferContext.h>
-#include <android/trusty/membuf/BnMemoryBufferShareVm.h>
 #include <binder/ParcelFileDescriptor.h>
 #include <binder/RpcServerTrusty.h>
 
 #include <dmaimporterlib.h>
+#include <memory_buffer_share.hpp>
 
 using android::binder::Status;
 using android::os::ParcelFileDescriptor;
 using android::trusty::cmdprocessor::BnCommandProcessor;
 using android::trusty::cmdprocessor::ICommandProcessor;
 using android::trusty::cmdprocessor::MemoryBufferReference;
-using android::trusty::membuf::BnMemoryBufferContext;
-using android::trusty::membuf::BnMemoryBufferShareVm;
-using android::trusty::membuf::IMemoryBufferContext;
-using android::trusty::membuf::IMemoryBufferShareVm;
-using android::trusty::membuf::MemoryBufferToken;
-using android::trusty::membuf::ShareMemoryBufferResult;
 using std::vector;
 
 #define TIPC_QUEUE_LEN 3
@@ -41,18 +34,6 @@ using std::vector;
 
 #define CMD_PROCESSOR_PORT \
     "android.trusty.cmdprocessor.ICommandProcessor/default"
-#define MEM_SHARE_PORT "android.trusty.membuf.IMemoryBufferShareVm/default"
-
-handle_t deserialize_token(const vector<uint8_t>& serialized_token) {
-    handle_t handle = 0;
-
-    for (auto element = serialized_token.rbegin();
-         element != serialized_token.rend(); ++element) {
-        handle = handle << 8;
-        handle |= *element;
-    }
-    return handle;
-}
 
 class CommandProcessor : public BnCommandProcessor {
 public:
@@ -143,129 +124,6 @@ public:
     }
 };
 
-class MemoryBufferContext : public BnMemoryBufferContext {
-public:
-    static android::sp<MemoryBufferContext> Make(handle_t handle,
-                                                 uint64_t ipa) {
-        auto self = android::sp<MemoryBufferContext>::make(handle, ipa);
-        return self;
-    }
-
-    MemoryBufferContext(handle_t handle, uint64_t ipa)
-            : handle_(handle), destroyed_(false), ipa_(ipa) {}
-
-    ~MemoryBufferContext() {
-        if (!destroyed_) {
-            TLOGE("MemoryBufferContext object destroyed before calling release\n");
-            // We are not calling the kernel service here for release to keep
-            // the destructor simple but that could lead to a case on which we
-            // are leaking resources.
-            close(handle_);
-            destroyed_ = true;
-        }
-    }
-
-    Status getPortableToken(MemoryBufferToken* aidl_return) override {
-        TLOGI("In getPortableToken\n");
-        if (aidl_return == nullptr) {
-            TLOGE("Received a null MemoryBufferToken\n");
-            return Status::fromExceptionCode(
-                    Status::EX_NULL_POINTER,
-                    "Received a null MemoryBufferToken");
-        }
-        if (destroyed_) {
-            // object is no longer usable
-            TLOGE("MemoryBufferToken has already been destroyed\n");
-            return Status::fromExceptionCode(
-                    Status::EX_ILLEGAL_STATE,
-                    "MemoryBufferToken has already been destroyed");
-        }
-        // TODO: check if we should provide tampering protection to the token
-        vector<uint8_t> serialized_token;
-        TLOGI("serializing handle %x\n", handle_);
-        handle_t token = handle_;
-        for (size_t i = 0; i < sizeof(handle_t); i++) {
-            uint8_t element = token & 0xff;
-            serialized_token.push_back(element);
-            token = token >> 8;
-        }
-        aidl_return->token = std::move(serialized_token);
-        return Status::ok();
-    }
-
-    Status releaseMemoryBufferContext(int32_t* aidl_return) override {
-        if (destroyed_) {
-            // object is no longer usable
-            TLOGE("MemoryBufferToken has already been destroyed\n");
-            return Status::fromExceptionCode(
-                    Status::EX_ILLEGAL_STATE,
-                    "MemoryBufferToken has already been destroyed");
-        }
-        int res = release_dma_object(&handle_, ipa_);
-        if (res != NO_ERROR) {
-            TLOGE("couldn't release handle %x\n", handle_);
-            return Status::fromExceptionCode(
-                    Status::EX_ILLEGAL_STATE,
-                    "Couldn't release MemoryBufferToken handle");
-        } else {
-            TLOGI("Released handle %x\n", handle_);
-            destroyed_ = true;
-            res = close(handle_);
-            if (res < 0) {
-                TLOGE("close handle failed: %d\n", res);
-            }
-            // TODO: is this a good value for a handle that is no longer valid?
-            handle_ = -1;
-        }
-        if (aidl_return != nullptr) {
-            // TODO: change returned value
-            *aidl_return = res;
-        }
-        return Status::ok();
-    }
-
-private:
-    handle_t handle_;
-    bool destroyed_;
-    uint64_t ipa_;
-};
-
-class MemoryBufferShare : public BnMemoryBufferShareVm {
-public:
-    static android::sp<MemoryBufferShare> Make(
-            android::sp<android::RpcServerTrusty> srv) {
-        auto self = android::sp<MemoryBufferShare>::make();
-        srv->setRootObject(self);
-        return self;
-    }
-
-    MemoryBufferShare() {}
-
-    Status shareMemoryBuffer(int64_t ipa,
-                             int32_t sizeBytes,
-                             ShareMemoryBufferResult* aidl_return) override {
-        TLOGI("In shareMemoryBuffer\n");
-        if (aidl_return == nullptr) {
-            TLOGE("reReceived a null ShareMemoryBufferResult\n");
-            return Status::fromExceptionCode(
-                    Status::EX_NULL_POINTER,
-                    "Received a null ShareMemoryBufferResult");
-        }
-        handle_t handle;
-        int rc = create_dma_object(ipa, sizeBytes, &handle);
-        if (rc < 0) {
-            TLOGE("Couldn't get memory handle from ipa: %d\n", rc);
-            return Status::fromExceptionCode(
-                    Status::EX_ILLEGAL_STATE,
-                    "Couldn't get memory handle from ipa");
-        }
-        android::sp<MemoryBufferContext> mem_buffer_ctx =
-                MemoryBufferContext::Make(handle, ipa);
-        aidl_return->context = mem_buffer_ctx;
-        return Status::ok();
-    }
-};
-
 int main(void) {
     TLOGI("Starting test c app\n");
 
@@ -308,7 +166,7 @@ int main(void) {
     }
 
     android::sp<MemoryBufferShare> mem_share_srv =
-            MemoryBufferShare::Make(mem_share_rpc_srv);
+            create_memory_buffer_share(mem_share_rpc_srv);
     if (mem_share_srv == nullptr) {
         return EXIT_FAILURE;
     }
