@@ -908,9 +908,8 @@ impl OpaqueKey {
     fn try_clone(&self) -> Result<Self, HwCryptoError> {
         let key_header = self.key_header.try_clone()?;
         let key_material = self.key_material.clone();
-        let client_id = if self.client_id.is_some() {
+        let client_id = if let Some(client_conn_id) = &self.client_id {
             let mut client_id = Vec::new();
-            let client_conn_id = self.client_id.as_ref().unwrap();
             client_id.try_reserve(client_conn_id.len())?;
             client_id.extend_from_slice(client_conn_id.as_slice());
             Some(client_id)
